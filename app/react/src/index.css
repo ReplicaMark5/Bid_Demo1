@@ -1,0 +1,121 @@
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  /* Dark Teal Theme Colors */
+  --primary-teal: #008080;
+  --primary-teal-light: #00a3a3;
+  --primary-teal-dark: #006666;
+  --secondary-teal: #20b2aa;
+  --accent-teal: #48d1cc;
+  --light-teal: #7fffd4;
+  --dark-teal: #004d4d;
+  --darker-teal: #003333;
+  --darkest-teal: #001a1a;
+  
+  /* Background Colors */
+  --bg-primary: #001a1a;
+  --bg-secondary: #003333;
+  --bg-tertiary: #004d4d;
+  --bg-card: #006666;
+  
+  /* Text Colors */
+  --text-primary: #e6f7ff;
+  --text-secondary: #b3e0ff;
+  --text-muted: #80ccff;
+  
+  /* Border Colors */
+  --border-primary: #008080;
+  --border-secondary: #20b2aa;
+  --border-muted: #004d4d;
+  
+  /* Status Colors */
+  --success: #00d4aa;
+  --warning: #ffb366;
+  --error: #ff6b6b;
+  --info: #48d1cc;
+
+  color-scheme: dark;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.phase-indicator {
+  text-align: center;
+  margin-bottom: 2rem;
+  color: var(--text-primary);
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.pareto-plot-container {
+  height: 500px;
+  margin-bottom: 2rem;
+}
+
+.solution-details {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 12px rgba(0, 128, 128, 0.2);
+  margin-bottom: 1rem;
+  color: var(--text-primary);
+}
+
+.allocation-table {
+  width: 100%;
+  margin-bottom: 1rem;
+}
+
+.ranking-table {
+  width: 100%;
+  margin-bottom: 1rem;
+}
+
+.status-selected {
+  color: var(--success);
+  font-weight: bold;
+}
+
+.status-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-secondary);
+}
+
+.loading-spinner {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 200px;
+}
