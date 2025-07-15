@@ -54,6 +54,12 @@ export const optimizationAPI = {
     return response.data
   },
 
+  // Initialize from database
+  initializeFromDatabase: async (config) => {
+    const response = await api.post('/optimization/initialize-from-db', config)
+    return response.data
+  },
+
   // Run optimization
   runOptimization: async (params) => {
     const response = await api.post('/optimization/run', params)

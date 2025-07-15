@@ -1,8 +1,10 @@
 import React, { useState } from 'react'
 import { Layout, Typography, Tabs, Alert } from 'antd'
-import { CalculatorOutlined } from '@ant-design/icons'
+import { CalculatorOutlined, UserOutlined, SettingOutlined } from '@ant-design/icons'
 import AHPScoringInterface from './components/AHPScoringInterface'
 import OptimizationInterface from './components/OptimizationInterface'
+import SupplierDataInterface from './components/SupplierDataInterface'
+import AdminSupplierManagement from './components/AdminSupplierManagement'
 import './App.css'
 
 const { Header, Content } = Layout
@@ -13,6 +15,26 @@ function App() {
   const [ahpResults, setAhpResults] = useState(null)
 
   const tabItems = [
+    {
+      key: 'supplier_data',
+      label: (
+        <span>
+          <UserOutlined />
+          Supplier Data Submission
+        </span>
+      ),
+      children: <SupplierDataInterface />
+    },
+    {
+      key: 'admin_management',
+      label: (
+        <span>
+          <SettingOutlined />
+          Admin Management
+        </span>
+      ),
+      children: <AdminSupplierManagement />
+    },
     {
       key: 'ahp_scoring',
       label: (

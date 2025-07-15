@@ -83,6 +83,32 @@ const OptimizationInterface = ({ ahpResults }) => {
     }
   }
 
+  const initializeFromDatabase = async () => {
+    setLoading(true)
+    try {
+      const config = {
+        random_seed: randomSeed
+      }
+      
+      const response = await optimizationAPI.initializeFromDatabase(config)
+      setOptimizerData(response)
+      setDataLoaded(true)
+      
+      notification.success({
+        message: 'Data Loaded from Database',
+        description: 'Supplier data loaded from database successfully!'
+      })
+    } catch (error) {
+      console.error('Error initializing optimizer from database:', error)
+      notification.error({
+        message: 'Database Initialization Error',
+        description: 'Failed to load data from database. Please ensure supplier data is complete and approved.'
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const runOptimization = async () => {
     setOptimizing(true)
     try {
@@ -593,6 +619,16 @@ const OptimizationInterface = ({ ahpResults }) => {
         style={{ width: '100%', marginBottom: 16 }}
       >
         🔍 Initialize & Analyze Data
+      </Button>
+
+      <Button
+        type="secondary"
+        icon={<FileExcelOutlined />}
+        onClick={initializeFromDatabase}
+        loading={loading}
+        style={{ width: '100%', marginBottom: 16 }}
+      >
+        📊 Load from Database
       </Button>
 
       {dataLoaded && (

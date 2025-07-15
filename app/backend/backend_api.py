@@ -15,6 +15,7 @@ import traceback
 # Add the current directory to sys.path to import the optimizer
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from MOO_e_constraint_Dynamic_Bid import SelectiveNAFlexibleEConstraintOptimizer
+from database import SupplierDatabase
 
 app = FastAPI(title="Supply Chain Optimizer API", version="1.0.0")
 
@@ -31,6 +32,9 @@ app.add_middleware(
 optimizer_instances = {}
 optimization_results = {}
 
+# Initialize database
+db = SupplierDatabase()
+
 # Pydantic models for request/response
 class AHPScoreRequest(BaseModel):
     description: str
@@ -45,6 +49,9 @@ class AHPCalculationRequest(BaseModel):
 class OptimizerInitRequest(BaseModel):
     file_path: str
     sheet_names: Dict[str, str]
+    random_seed: int = 42
+
+class OptimizerInitFromDBRequest(BaseModel):
     random_seed: int = 42
 
 class OptimizationRequest(BaseModel):
@@ -226,6 +233,79 @@ async def initialize_optimizer(request: OptimizerInitRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error initializing optimizer: {str(e)}")
+
+@app.post("/api/optimization/initialize-from-db", response_model=OptimizerInitResponse)
+async def initialize_optimizer_from_db(request: OptimizerInitFromDBRequest):
+    """Initialize optimizer from database data"""
+    try:
+        # Set random seed
+        np.random.seed(request.random_seed)
+        
+        # Create temporary Excel file from database
+        temp_file = db.create_temporary_excel_file()
+        
+        # Initialize optimizer with temporary file
+        sheet_names = {
+            'obj1': 'Obj1_Coeff',
+            'obj2': 'Obj2_Coeff',
+            'volumes': 'Annual Volumes'
+        }
+        
+        optimizer = SelectiveNAFlexibleEConstraintOptimizer(
+            temp_file, 
+            sheet_names
+        )
+        
+        # Store optimizer instance
+        optimizer_id = f"optimizer_{datetime.now().timestamp()}"
+        optimizer_instances[optimizer_id] = optimizer
+        
+        # Prepare availability data
+        availability_data = []
+        for depot in optimizer.depots:
+            for supplier in optimizer.suppliers:
+                if (depot, supplier) in optimizer.all_pairs:
+                    collection_valid = optimizer.valid_collection.get((depot, supplier), False)
+                    delivery_valid = optimizer.valid_delivery.get((depot, supplier), False)
+                    
+                    operations = []
+                    if collection_valid:
+                        operations.append("Collection")
+                    if delivery_valid:
+                        operations.append("Delivery")
+                    
+                    availability_data.append({
+                        "depot": depot,
+                        "supplier": supplier,
+                        "operations": operations,
+                        "collection": collection_valid,
+                        "delivery": delivery_valid
+                    })
+        
+        # Calculate statistics
+        total_pairs = len(availability_data)
+        collection_available = sum(1 for item in availability_data if item["collection"])
+        delivery_available = sum(1 for item in availability_data if item["delivery"])
+        
+        # Clean up temporary file
+        try:
+            os.remove(temp_file)
+        except:
+            pass
+        
+        return OptimizerInitResponse(
+            success=True,
+            message="Optimizer initialized successfully from database",
+            n_depots=optimizer.n_depots,
+            n_suppliers=optimizer.n_suppliers,
+            total_pairs=total_pairs,
+            collection_available=collection_available,
+            delivery_available=delivery_available,
+            availability=availability_data
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error initializing optimizer from database: {str(e)}")
 
 @app.post("/api/optimization/run", response_model=OptimizationResponse)
 async def run_optimization(request: OptimizationRequest):

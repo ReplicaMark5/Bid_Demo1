@@ -11,7 +11,8 @@ import {
   Alert, 
   Spin, 
   notification,
-  Divider
+  Divider,
+  Tag
 } from 'antd'
 import { CalculatorOutlined, CheckOutlined } from '@ant-design/icons'
 import Plot from 'react-plotly.js'
@@ -30,14 +31,105 @@ const AHPScoringInterface = ({ ahpResults, setAhpResults, setCurrentPhase }) => 
   const [loading, setLoading] = useState(false)
   const [loadingAI, setLoadingAI] = useState({})
 
+  // Load AHP configuration from localStorage on component mount
   useEffect(() => {
-    // Initialize arrays when counts change
-    setCriteriaNames(Array(numCriteria).fill('').map((_, i) => `Criteria ${i + 1}`))
-    setCriteriaWeights(Array(numCriteria).fill(1.0))
-    setSupplierNames(Array(numSuppliers).fill('').map((_, i) => `Supplier ${i + 1}`))
+    const savedConfig = localStorage.getItem('ahpConfig')
+    if (savedConfig) {
+      const config = JSON.parse(savedConfig)
+      setNumCriteria(config.numCriteria || 3)
+      setNumSuppliers(config.supplierNames?.length || 0)
+      if (config.criteriaNames) {
+        setCriteriaNames(config.criteriaNames)
+      }
+      if (config.criteriaWeights) {
+        setCriteriaWeights(config.criteriaWeights)
+      }
+      if (config.supplierNames) {
+        setSupplierNames(config.supplierNames)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    // Reset supplier data when count changes
     setSupplierDescriptions({})
     setAiScores({})
-  }, [numCriteria, numSuppliers])
+  }, [numSuppliers])
+
+  useEffect(() => {
+    // Only reset criteria if they're not already loaded from config
+    const savedConfig = localStorage.getItem('ahpConfig')
+    if (!savedConfig || !JSON.parse(savedConfig).criteriaNames) {
+      setCriteriaNames(Array(numCriteria).fill('').map((_, i) => `Criteria ${i + 1}`))
+      setCriteriaWeights(Array(numCriteria).fill(1.0))
+    }
+  }, [numCriteria])
+
+  // Listen for configuration changes from admin panel
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      console.log('Storage change detected in AHPScoringInterface:', e)
+      if (e.key === 'ahpConfig' && e.newValue) {
+        const config = JSON.parse(e.newValue)
+        console.log('Updating AHP config from storage:', config)
+        setNumCriteria(config.numCriteria || 3)
+        setNumSuppliers(config.supplierNames?.length || 0)
+        if (config.criteriaNames) {
+          setCriteriaNames(config.criteriaNames)
+        }
+        if (config.criteriaWeights) {
+          setCriteriaWeights(config.criteriaWeights)
+        }
+        if (config.supplierNames) {
+          setSupplierNames(config.supplierNames)
+        }
+        // Reset supplier descriptions and scores when config changes
+        setSupplierDescriptions({})
+        setAiScores({})
+      }
+    }
+    
+    // Add listener for custom storage events (for same-window updates)
+    window.addEventListener('storage', handleStorageChange)
+    
+    // Also check for updates on visibility change (when switching tabs)
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        const savedConfig = localStorage.getItem('ahpConfig')
+        if (savedConfig) {
+          const config = JSON.parse(savedConfig)
+          // Only update if config actually changed
+          if (JSON.stringify(config) !== JSON.stringify({
+            numCriteria,
+            numSuppliers,
+            criteriaNames,
+            criteriaWeights,
+            supplierNames
+          })) {
+            console.log('Updating AHP config on visibility change:', config)
+            setNumCriteria(config.numCriteria || 3)
+            setNumSuppliers(config.supplierNames?.length || 0)
+            if (config.criteriaNames) {
+              setCriteriaNames(config.criteriaNames)
+            }
+            if (config.criteriaWeights) {
+              setCriteriaWeights(config.criteriaWeights)
+            }
+            if (config.supplierNames) {
+              setSupplierNames(config.supplierNames)
+            }
+          }
+        }
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [numCriteria, numSuppliers, criteriaNames, criteriaWeights, supplierNames])
 
   const handleCriteriaNameChange = (index, value) => {
     const newNames = [...criteriaNames]
@@ -51,11 +143,6 @@ const AHPScoringInterface = ({ ahpResults, setAhpResults, setCurrentPhase }) => 
     setCriteriaWeights(newWeights)
   }
 
-  const handleSupplierNameChange = (index, value) => {
-    const newNames = [...supplierNames]
-    newNames[index] = value || `Supplier ${index + 1}`
-    setSupplierNames(newNames)
-  }
 
   const handleDescriptionChange = async (supplierIndex, criteriaIndex, description) => {
     const key = `${supplierIndex}-${criteriaIndex}`
@@ -276,93 +363,57 @@ const AHPScoringInterface = ({ ahpResults, setAhpResults, setCurrentPhase }) => 
         Evaluate suppliers using AHP methodology with AI-assisted scoring
       </Text>
 
-      <Card style={{ marginTop: 24 }}>
-        <Title level={4}>🔧 AHP Configuration</Title>
-        <Row gutter={16}>
-          <Col span={8}>
-            <Text strong>Number of Criteria:</Text>
-            <InputNumber
-              min={1}
-              max={10}
-              value={numCriteria}
-              onChange={setNumCriteria}
-              style={{ width: '100%', marginTop: 8 }}
-            />
-          </Col>
-          <Col span={8}>
-            <Text strong>Number of Suppliers:</Text>
-            <InputNumber
-              min={1}
-              max={10}
-              value={numSuppliers}
-              onChange={setNumSuppliers}
-              style={{ width: '100%', marginTop: 8 }}
-            />
-          </Col>
-          <Col span={8}>
-            {ahpResults && (
-              <div>
-                <Text strong>✅ AHP Scores Calculated</Text>
-                <div style={{ marginTop: 8 }}>
-                  <Text strong>Supplier Rankings:</Text>
-                  {ahpResults.suppliers.map((supplier, i) => (
-                    <div key={i}>
-                      <Text>{i + 1}. {supplier}: {ahpResults.scores[i].toFixed(2)}</Text>
-                    </div>
-                  ))}
-                </div>
+      {ahpResults && (
+        <Card style={{ marginTop: 24 }}>
+          <Title level={4}>✅ AHP Results</Title>
+          <div>
+            <Text strong>Supplier Rankings:</Text>
+            {ahpResults.suppliers.map((supplier, i) => (
+              <div key={i} style={{ marginTop: 4 }}>
+                <Text>{i + 1}. {supplier}: {ahpResults.scores[i].toFixed(3)}</Text>
               </div>
-            )}
+            ))}
+          </div>
+          <Alert
+            style={{ marginTop: 16 }}
+            message="Configuration is now managed in Admin Management → AHP Configuration tab"
+            type="info"
+            showIcon
+          />
+        </Card>
+      )}
+
+      <Alert
+        style={{ marginTop: 24 }}
+        message="Configuration Managed Centrally"
+        description="Criteria names and weights are now configured in Admin Management → AHP Configuration tab. Use this interface to enter supplier information and calculate scores."
+        type="info"
+        showIcon
+      />
+
+      <Card style={{ marginTop: 24 }}>
+        <Title level={4}>Current Configuration</Title>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Text strong>Criteria: </Text>
+            {criteriaNames.map((name, index) => (
+              <Tag key={index} style={{ margin: '2px' }}>{name}</Tag>
+            ))}
+          </Col>
+          <Col span={12}>
+            <Text strong>Weights: </Text>
+            {criteriaWeights.map((weight, index) => (
+              <Tag key={index} color="blue" style={{ margin: '2px' }}>{criteriaNames[index]}: {weight}</Tag>
+            ))}
           </Col>
         </Row>
       </Card>
 
       <Card style={{ marginTop: 24 }}>
-        <Title level={4}>Step 1: Define Supplier Selection Criteria</Title>
-        <div className="criteria-input-grid">
-          {criteriaNames.map((name, index) => (
-            <div key={index}>
-              <Text strong>Criteria {index + 1} name:</Text>
-              <Input
-                value={name}
-                onChange={(e) => handleCriteriaNameChange(index, e.target.value)}
-                placeholder={`Criteria ${index + 1}`}
-                style={{ marginTop: 8 }}
-              />
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      <Card style={{ marginTop: 24 }}>
-        <Title level={4}>Step 2: Assign Criteria Weights (Relative Importance)</Title>
-        <div className="criteria-input-grid">
-          {criteriaNames.map((name, index) => (
-            <div key={index}>
-              <Text strong>Weight for '{name}':</Text>
-              <InputNumber
-                min={0}
-                step={0.1}
-                value={criteriaWeights[index]}
-                onChange={(value) => handleCriteriaWeightChange(index, value)}
-                style={{ width: '100%', marginTop: 8 }}
-              />
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      <Card style={{ marginTop: 24 }}>
-        <Title level={4}>Step 3: Enter Supplier Scores per Criterion</Title>
+        <Title level={4}>Step 1: Enter Supplier Scores per Criterion</Title>
         {supplierNames.map((supplierName, supplierIndex) => (
           <div key={supplierIndex} className="supplier-input-section">
-            <Title level={5}>Supplier {supplierIndex + 1}</Title>
-            <Input
-              value={supplierName}
-              onChange={(e) => handleSupplierNameChange(supplierIndex, e.target.value)}
-              placeholder={`Name of Supplier ${supplierIndex + 1}`}
-              style={{ marginBottom: 16 }}
-            />
+            <Title level={5}>{supplierName || `Supplier ${supplierIndex + 1}`}</Title>
             
             <div className="supplier-criteria-grid">
               {criteriaNames.map((criteria, criteriaIndex) => {
@@ -371,7 +422,7 @@ const AHPScoringInterface = ({ ahpResults, setAhpResults, setCurrentPhase }) => 
                 const aiScore = aiScores[key]
                 
                 return (
-                  <div key={criteriaIndex}>
+                  <div key={`${supplierIndex}-${criteriaIndex}`}>
                     <Text strong>Describe {criteria} for {supplierName}:</Text>
                     <Input.TextArea
                       value={supplierDescriptions[key] || ''}
@@ -396,6 +447,7 @@ const AHPScoringInterface = ({ ahpResults, setAhpResults, setCurrentPhase }) => 
       </Card>
 
       <Card style={{ marginTop: 24 }}>
+        <Title level={4}>Step 2: Calculate AHP Supplier Scores</Title>
         <Button
           type="primary"
           icon={<CalculatorOutlined />}

@@ -1,0 +1,5 @@
+Run_app_commands
+
+uvicorn supplier_api:app --reload --port 8001
+uvicorn backend_api:app --reload --port 8000
+npm run dev

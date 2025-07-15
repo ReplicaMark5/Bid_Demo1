@@ -3,3 +3,4 @@ Output Data/
 venv/
 .venv/
 node_modules/
+app/backend/supplier_data.db
