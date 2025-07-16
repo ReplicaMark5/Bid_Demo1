@@ -55,13 +55,58 @@ class SupplierDatabase:
                 )
             """)
             
-            # Create supplier_scores table for AHP data
+            # Create supplier_scores table for PROMETHEE II data
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS supplier_scores (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     supplier_id INTEGER NOT NULL,
                     total_score REAL NOT NULL,
                     criteria_scores TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
+                )
+            """)
+            
+            # Create depot_managers table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS depot_managers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    email TEXT,
+                    depot_id INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (depot_id) REFERENCES depots (id)
+                )
+            """)
+            
+            # Create depot_evaluations table for PROMETHEE II data
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS depot_evaluations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    depot_id INTEGER NOT NULL,
+                    supplier_id INTEGER NOT NULL,
+                    criterion_name TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    manager_name TEXT,
+                    manager_email TEXT,
+                    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (depot_id) REFERENCES depots (id),
+                    FOREIGN KEY (supplier_id) REFERENCES suppliers (id),
+                    UNIQUE(depot_id, supplier_id, criterion_name)
+                )
+            """)
+            
+            # Create promethee_results table for storing PROMETHEE II results
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS promethee_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    supplier_id INTEGER NOT NULL,
+                    positive_flow REAL NOT NULL,
+                    negative_flow REAL NOT NULL,
+                    net_flow REAL NOT NULL,
+                    ranking INTEGER NOT NULL,
+                    confidence_level REAL,
+                    criteria_weights TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
                 )
@@ -160,6 +205,29 @@ class SupplierDatabase:
         """Approve a supplier submission"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            
+            # Check if this would create a duplicate approved submission
+            cursor.execute("""
+                SELECT s.supplier_id, s.depot_id
+                FROM supplier_submissions s
+                WHERE s.id = ?
+            """, (submission_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return False
+            
+            supplier_id, depot_id = result
+            
+            # Check if there's already an approved submission for this supplier-depot pair
+            cursor.execute("""
+                SELECT COUNT(*) FROM supplier_submissions
+                WHERE supplier_id = ? AND depot_id = ? AND status = 'approved'
+            """, (supplier_id, depot_id))
+            
+            if cursor.fetchone()[0] > 0:
+                raise ValueError(f"Supplier {supplier_id} already has an approved submission for depot {depot_id}")
+            
             cursor.execute("""
                 UPDATE supplier_submissions 
                 SET status = 'approved', approved_at = CURRENT_TIMESTAMP, approved_by = ?
@@ -205,7 +273,7 @@ class SupplierDatabase:
         return self.get_supplier_submissions(status=status)
     
     def save_supplier_scores(self, supplier_id: int, total_score: float, criteria_scores: str) -> int:
-        """Save supplier AHP scores"""
+        """Save supplier PROMETHEE II scores"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -301,8 +369,9 @@ class SupplierDatabase:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
+            # Simplified query without supplier_scores LEFT JOIN to avoid corruption issues
             query = """
-                SELECT 
+                SELECT DISTINCT
                     ss.id as submission_id,
                     s.name as supplier_name,
                     s.id as supplier_id,
@@ -316,12 +385,11 @@ class SupplierDatabase:
                     ss.distance_km,
                     ss.approved_at,
                     ss.approved_by,
-                    scores.total_score,
-                    scores.criteria_scores
+                    NULL as total_score,
+                    NULL as criteria_scores
                 FROM supplier_submissions ss
                 JOIN suppliers s ON ss.supplier_id = s.id
                 JOIN depots d ON ss.depot_id = d.id
-                LEFT JOIN supplier_scores scores ON s.id = scores.supplier_id
                 WHERE ss.status = 'approved'
                 ORDER BY s.name, d.name
             """
@@ -331,3 +399,247 @@ class SupplierDatabase:
             
             columns = [desc[0] for desc in cursor.description]
             return [dict(zip(columns, row)) for row in rows]
+    
+    def add_depot_manager(self, name: str, email: str, depot_id: int) -> int:
+        """Add a new depot manager"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO depot_managers (name, email, depot_id) VALUES (?, ?, ?)",
+                (name, email, depot_id)
+            )
+            return cursor.lastrowid
+    
+    def get_depot_managers(self, depot_id: int = None) -> List[Dict]:
+        """Get depot managers, optionally filtered by depot"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            query = """
+                SELECT dm.id, dm.name, dm.email, dm.depot_id, d.name as depot_name
+                FROM depot_managers dm
+                JOIN depots d ON dm.depot_id = d.id
+            """
+            params = []
+            if depot_id:
+                query += " WHERE dm.depot_id = ?"
+                params.append(depot_id)
+            
+            cursor.execute(query, params)
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def submit_depot_evaluation(self, depot_id: int, supplier_id: int, criterion_name: str, 
+                               score: float, manager_name: str = None, manager_email: str = None) -> int:
+        """Submit a depot evaluation for a supplier-criterion pair"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO depot_evaluations 
+                (depot_id, supplier_id, criterion_name, score, manager_name, manager_email)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (depot_id, supplier_id, criterion_name, score, manager_name, manager_email))
+            return cursor.lastrowid
+    
+    def get_depot_evaluations(self, depot_id: int = None, supplier_id: int = None) -> List[Dict]:
+        """Get depot evaluations with optional filtering"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            query = """
+                SELECT de.id, de.depot_id, d.name as depot_name,
+                       de.supplier_id, s.name as supplier_name,
+                       de.criterion_name, de.score, de.manager_name, de.manager_email,
+                       de.submitted_at
+                FROM depot_evaluations de
+                JOIN depots d ON de.depot_id = d.id
+                JOIN suppliers s ON de.supplier_id = s.id
+            """
+            
+            conditions = []
+            params = []
+            
+            if depot_id:
+                conditions.append("de.depot_id = ?")
+                params.append(depot_id)
+            
+            if supplier_id:
+                conditions.append("de.supplier_id = ?")
+                params.append(supplier_id)
+            
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            
+            query += " ORDER BY de.submitted_at DESC"
+            
+            cursor.execute(query, params)
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def get_aggregated_supplier_scores(self, criteria_names: List[str]) -> Dict[int, Dict[str, Dict]]:
+        """Get aggregated scores for PROMETHEE II calculation"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Get all evaluations with averaged scores
+            cursor.execute("""
+                SELECT supplier_id, criterion_name, AVG(score) as avg_score, COUNT(*) as num_evaluations
+                FROM depot_evaluations
+                GROUP BY supplier_id, criterion_name
+            """)
+            
+            # Initialize result structure
+            result = {}
+            
+            for row in cursor.fetchall():
+                supplier_id, criterion_name, avg_score, count = row
+                
+                if supplier_id not in result:
+                    result[supplier_id] = {}
+                
+                result[supplier_id][criterion_name] = {
+                    'score': avg_score,
+                    'evaluations_count': count,
+                    'confidence': count  # Show number of evaluations instead of percentage
+                }
+            
+            return result
+    
+    def get_supplier_evaluation_counts(self) -> Dict[int, int]:
+        """Get the number of manager evaluations per supplier"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Count unique depot managers per supplier
+            cursor.execute("""
+                SELECT supplier_id, COUNT(DISTINCT depot_id) as manager_count
+                FROM depot_evaluations
+                GROUP BY supplier_id
+            """)
+            
+            result = {}
+            for row in cursor.fetchall():
+                supplier_id, manager_count = row
+                result[supplier_id] = manager_count
+            
+            return result
+    
+    def clear_depot_evaluations(self) -> Dict:
+        """Clear all depot evaluations and return count of cleared records"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Get count before clearing
+            cursor.execute("SELECT COUNT(*) FROM depot_evaluations")
+            count_before = cursor.fetchone()[0]
+            
+            # Clear all depot evaluations
+            cursor.execute("DELETE FROM depot_evaluations")
+            conn.commit()
+            
+            return {
+                "message": "All depot evaluations cleared successfully",
+                "cleared_count": count_before
+            }
+    
+    def save_promethee_results(self, supplier_id: int, positive_flow: float, negative_flow: float,
+                              net_flow: float, ranking: int, confidence_level: float,
+                              criteria_weights: str) -> int:
+        """Save PROMETHEE II results"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO promethee_results 
+                (supplier_id, positive_flow, negative_flow, net_flow, ranking, confidence_level, criteria_weights)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (supplier_id, positive_flow, negative_flow, net_flow, ranking, confidence_level, criteria_weights))
+            return cursor.lastrowid
+    
+    def get_promethee_results(self) -> List[Dict]:
+        """Get PROMETHEE II results"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT pr.supplier_id, s.name as supplier_name,
+                       pr.positive_flow, pr.negative_flow, pr.net_flow,
+                       pr.ranking, pr.confidence_level, pr.criteria_weights,
+                       pr.created_at
+                FROM promethee_results pr
+                JOIN suppliers s ON pr.supplier_id = s.id
+                ORDER BY pr.ranking
+            """)
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def cleanup_duplicate_submissions(self) -> Dict:
+        """Remove duplicate supplier-depot pairs, keeping the most recent approved submission"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Find duplicates
+            cursor.execute("""
+                SELECT supplier_id, depot_id, COUNT(*) as count
+                FROM supplier_submissions
+                WHERE status = 'approved'
+                GROUP BY supplier_id, depot_id
+                HAVING COUNT(*) > 1
+            """)
+            duplicates = cursor.fetchall()
+            
+            if not duplicates:
+                return {"message": "No duplicates found", "cleaned": 0}
+            
+            cleaned_count = 0
+            for supplier_id, depot_id, count in duplicates:
+                # Keep the most recent submission, delete others
+                cursor.execute("""
+                    DELETE FROM supplier_submissions
+                    WHERE supplier_id = ? AND depot_id = ? AND status = 'approved'
+                    AND id NOT IN (
+                        SELECT id FROM supplier_submissions
+                        WHERE supplier_id = ? AND depot_id = ? AND status = 'approved'
+                        ORDER BY approved_at DESC, id DESC
+                        LIMIT 1
+                    )
+                """, (supplier_id, depot_id, supplier_id, depot_id))
+                cleaned_count += cursor.rowcount
+            
+            conn.commit()
+            return {
+                "message": f"Cleaned {cleaned_count} duplicate submissions",
+                "duplicate_pairs": len(duplicates),
+                "cleaned": cleaned_count
+            }
+
+    def get_evaluation_summary(self) -> Dict:
+        """Get summary of depot evaluations for admin dashboard"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Total evaluations
+            cursor.execute("SELECT COUNT(*) FROM depot_evaluations")
+            total_evaluations = cursor.fetchone()[0]
+            
+            # Evaluations by supplier
+            cursor.execute("""
+                SELECT s.name, COUNT(de.id) as evaluation_count
+                FROM suppliers s
+                LEFT JOIN depot_evaluations de ON s.id = de.supplier_id
+                GROUP BY s.id, s.name
+                ORDER BY evaluation_count DESC
+            """)
+            supplier_evaluations = [{"supplier": row[0], "count": row[1]} for row in cursor.fetchall()]
+            
+            # Evaluations by depot
+            cursor.execute("""
+                SELECT d.name, COUNT(de.id) as evaluation_count
+                FROM depots d
+                LEFT JOIN depot_evaluations de ON d.id = de.depot_id
+                GROUP BY d.id, d.name
+                ORDER BY evaluation_count DESC
+            """)
+            depot_evaluations = [{"depot": row[0], "count": row[1]} for row in cursor.fetchall()]
+            
+            return {
+                "total_evaluations": total_evaluations,
+                "supplier_evaluations": supplier_evaluations,
+                "depot_evaluations": depot_evaluations
+            }

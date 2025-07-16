@@ -30,7 +30,7 @@ api.interceptors.response.use(
   }
 )
 
-export const ahpAPI = {
+export const prometheeAPI = {
   // Get AI score for supplier description
   getAIScore: async (description, criterion) => {
     const response = await api.post('/ahp/ai-score', {
@@ -40,9 +40,10 @@ export const ahpAPI = {
     return response.data
   },
 
-  // Calculate AHP scores
-  calculateAHPScores: async (data) => {
-    const response = await api.post('/ahp/calculate', data)
+  // Calculate PROMETHEE II scores - this function is legacy and not used
+  // The actual PROMETHEE II calculation is done via /promethee/calculate endpoint
+  calculatePROMETHEEScores: async (data) => {
+    const response = await api.post('/promethee/calculate', data)
     return response.data
   }
 }

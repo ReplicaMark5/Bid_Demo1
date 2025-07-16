@@ -85,7 +85,7 @@ const SupplierDataInterface = () => {
 
   const fetchSuppliers = async () => {
     try {
-      const response = await fetch('http://localhost:8001/api/suppliers/')
+      const response = await fetch('http://localhost:8000/api/suppliers/')
       const data = await response.json()
       setSuppliers(data.suppliers || [])
     } catch (error) {
@@ -96,7 +96,7 @@ const SupplierDataInterface = () => {
 
   const fetchDepots = async () => {
     try {
-      const response = await fetch('http://localhost:8001/api/depots/')
+      const response = await fetch('http://localhost:8000/api/depots/')
       const data = await response.json()
       setDepots(data.depots || [])
     } catch (error) {
@@ -108,7 +108,7 @@ const SupplierDataInterface = () => {
   const fetchSupplierSubmissions = async (supplierId) => {
     try {
       setLoading(true)
-      const response = await fetch(`http://localhost:8001/api/suppliers/${supplierId}/submissions/`)
+      const response = await fetch(`http://localhost:8000/api/suppliers/${supplierId}/submissions/`)
       const data = await response.json()
       setSubmissions(data.submissions || [])
     } catch (error) {
@@ -122,7 +122,7 @@ const SupplierDataInterface = () => {
   const handleSubmit = async (values) => {
     try {
       setLoading(true)
-      const response = await fetch('http://localhost:8001/api/suppliers/submit-data/', {
+      const response = await fetch('http://localhost:8000/api/suppliers/submit-data/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -331,7 +331,7 @@ const SupplierDataInterface = () => {
           return null
         }).filter(item => item !== null)
 
-        const response = await fetch('http://localhost:8001/api/suppliers/submit-bulk-data/', {
+        const response = await fetch('http://localhost:8000/api/suppliers/submit-bulk-data/', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

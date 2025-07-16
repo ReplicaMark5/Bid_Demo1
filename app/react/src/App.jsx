@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Layout, Typography, Tabs, Alert } from 'antd'
 import { CalculatorOutlined, UserOutlined, SettingOutlined } from '@ant-design/icons'
-import AHPScoringInterface from './components/AHPScoringInterface'
+import PROMETHEEIIScoringInterface from './components/PROMETHEEIIScoringInterface'
 import OptimizationInterface from './components/OptimizationInterface'
 import SupplierDataInterface from './components/SupplierDataInterface'
 import AdminSupplierManagement from './components/AdminSupplierManagement'
@@ -11,8 +11,8 @@ const { Header, Content } = Layout
 const { Title, Text } = Typography
 
 function App() {
-  const [currentPhase, setCurrentPhase] = useState('ahp_scoring')
-  const [ahpResults, setAhpResults] = useState(null)
+  const [currentPhase, setCurrentPhase] = useState('promethee_scoring')
+  const [prometheeResults, setPrometheeResults] = useState(null)
 
   const tabItems = [
     {
@@ -36,17 +36,17 @@ function App() {
       children: <AdminSupplierManagement />
     },
     {
-      key: 'ahp_scoring',
+      key: 'promethee_scoring',
       label: (
         <span>
           <CalculatorOutlined />
-          AHP Supplier Scoring
+          PROMETHEE II Supplier Scoring
         </span>
       ),
       children: (
-        <AHPScoringInterface 
-          ahpResults={ahpResults}
-          setAhpResults={setAhpResults}
+        <PROMETHEEIIScoringInterface 
+          prometheeResults={prometheeResults}
+          setPrometheeResults={setPrometheeResults}
           setCurrentPhase={setCurrentPhase}
         />
       )
@@ -60,7 +60,7 @@ function App() {
       ),
       children: (
         <OptimizationInterface 
-          ahpResults={ahpResults}
+          prometheeResults={prometheeResults}
         />
       )
     }

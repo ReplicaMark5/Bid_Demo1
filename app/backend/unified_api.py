@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any, Optional
 import os
 import sys
@@ -17,7 +17,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from MOO_e_constraint_Dynamic_Bid import SelectiveNAFlexibleEConstraintOptimizer
 from database import SupplierDatabase
 
-app = FastAPI(title="Supply Chain Optimizer API", version="1.0.0")
+app = FastAPI(title="Unified Supply Chain Optimizer API", version="1.0.0")
 
 # Enable CORS
 app.add_middleware(
@@ -35,16 +35,53 @@ optimization_results = {}
 # Initialize database
 db = SupplierDatabase()
 
-# Pydantic models for request/response
-class AHPScoreRequest(BaseModel):
-    description: str
-    criterion: str
+# GitHub AI integration
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+endpoint = "https://models.github.ai/inference"
+model_name = "openai/gpt-4o"
 
-class AHPCalculationRequest(BaseModel):
-    criteria_names: List[str]
-    criteria_weights: List[float]
-    supplier_names: List[str]
-    scores_matrix: List[List[float]]
+# Pydantic models - Combined from both APIs
+class SupplierCreate(BaseModel):
+    name: str
+    email: Optional[str] = None
+
+class DepotCreate(BaseModel):
+    name: str
+    annual_volume: Optional[float] = None
+
+class SupplierDataSubmission(BaseModel):
+    supplier_id: int
+    depot_id: int
+    coc_rebate: Optional[float] = None
+    cost_of_collection: Optional[float] = None
+    del_rebate: Optional[float] = None
+    zone_differential: float
+    distance_km: Optional[float] = None
+    
+    @field_validator('zone_differential')
+    def validate_zone_differential(cls, v):
+        if v is None:
+            raise ValueError('Zone differential is required')
+        return v
+
+class SupplierScores(BaseModel):
+    supplier_id: int
+    total_score: float
+    criteria_scores: Dict[str, float]
+
+class ApprovalRequest(BaseModel):
+    submission_id: int
+    approved_by: str
+
+class BulkApprovalRequest(BaseModel):
+    supplier_id: int
+    approved_by: str
+
+class BulkDataSubmission(BaseModel):
+    supplier_id: int
+    submissions: List[Dict[str, Any]]
+
+# Legacy AHP models removed - now using PROMETHEE II
 
 class DepotEvaluationRequest(BaseModel):
     depot_id: int
@@ -81,15 +118,7 @@ class OptimizationRequest(BaseModel):
     ranking_metric: str = "cost_effectiveness"
     show_ranking_in_ui: bool = True
 
-class AHPScoreResponse(BaseModel):
-    score: int
-    description: str
-    criterion: str
-
-class AHPCalculationResponse(BaseModel):
-    weighted_scores: List[float]
-    criteria_weights: List[float]
-    normalized_weights: List[float]
+# Legacy AHP response models removed - now using PROMETHEE II
 
 class OptimizerInitResponse(BaseModel):
     success: bool
@@ -108,11 +137,11 @@ class OptimizationResponse(BaseModel):
     ranking_analysis: Optional[Dict[str, Any]] = None
     ranking_reports: Optional[Dict[str, str]] = None
 
-# GitHub AI integration (same as Streamlit app)
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-endpoint = "https://models.github.ai/inference"
-model_name = "openai/gpt-4o"
+# Dependency to get database instance
+def get_db():
+    return db
 
+# AI scoring function
 async def get_ai_score(description: str, criterion: str) -> int:
     """Get AI-generated score for supplier evaluation"""
     if not GITHUB_TOKEN:
@@ -154,21 +183,13 @@ async def get_ai_score(description: str, criterion: str) -> int:
         print(f"AI scoring error: {e}")
         return 5
 
+# PROMETHEE II calculation function
 def calculate_promethee_ii(supplier_scores: Dict[int, Dict[str, float]], 
                           criteria_weights: Dict[str, float],
                           preference_thresholds: Dict[str, float] = None,
                           indifference_thresholds: Dict[str, float] = None) -> Dict[str, Any]:
     """
     Calculate PROMETHEE II ranking for suppliers
-    
-    Args:
-        supplier_scores: {supplier_id: {criterion_name: score}}
-        criteria_weights: {criterion_name: weight}
-        preference_thresholds: {criterion_name: threshold} (optional)
-        indifference_thresholds: {criterion_name: threshold} (optional)
-    
-    Returns:
-        Dictionary with ranking results
     """
     suppliers = list(supplier_scores.keys())
     criteria = list(criteria_weights.keys())
@@ -229,47 +250,309 @@ def calculate_promethee_ii(supplier_scores: Dict[int, Dict[str, float]],
     
     return results
 
-# API Routes
+# ============================================================================
+# API ROUTES
+# ============================================================================
 
 @app.get("/")
 async def root():
-    return {"message": "Supply Chain Optimizer API", "version": "1.0.0"}
+    return {"message": "Unified Supply Chain Optimizer API", "version": "1.0.0"}
 
-@app.post("/api/ahp/ai-score", response_model=AHPScoreResponse)
-async def get_ai_supplier_score(request: AHPScoreRequest):
-    """Get AI-generated score for supplier description"""
-    try:
-        score = await get_ai_score(request.description, request.criterion)
-        return AHPScoreResponse(
-            score=score,
-            description=request.description,
-            criterion=request.criterion
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting AI score: {str(e)}")
+# ============================================================================
+# SUPPLIER AND DEPOT MANAGEMENT (from supplier_api.py)
+# ============================================================================
 
-@app.post("/api/ahp/calculate", response_model=AHPCalculationResponse)
-async def calculate_ahp_scores(request: AHPCalculationRequest):
-    """Calculate AHP weighted scores"""
+@app.post("/api/suppliers/")
+async def create_supplier(supplier: SupplierCreate, db: SupplierDatabase = Depends(get_db)):
+    """Create a new supplier"""
     try:
-        # Convert to numpy arrays for calculation
-        scores_matrix = np.array(request.scores_matrix)
-        weights = np.array(request.criteria_weights)
-        
-        # Calculate weighted scores
-        weighted_scores = np.dot(scores_matrix, weights)
-        
-        # Normalize weights
-        weight_sum = sum(request.criteria_weights)
-        normalized_weights = [w / weight_sum for w in request.criteria_weights]
-        
-        return AHPCalculationResponse(
-            weighted_scores=weighted_scores.tolist(),
-            criteria_weights=request.criteria_weights,
-            normalized_weights=normalized_weights
-        )
+        supplier_id = db.add_supplier(supplier.name, supplier.email)
+        return {"id": supplier_id, "message": "Supplier created successfully"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error calculating AHP scores: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Error creating supplier: {str(e)}")
+
+@app.get("/api/suppliers/")
+async def get_suppliers(db: SupplierDatabase = Depends(get_db)):
+    """Get all suppliers"""
+    try:
+        suppliers = db.get_suppliers()
+        return {"suppliers": suppliers}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching suppliers: {str(e)}")
+
+@app.post("/api/depots/")
+async def create_depot(depot: DepotCreate, db: SupplierDatabase = Depends(get_db)):
+    """Create a new depot (admin only)"""
+    try:
+        depot_id = db.add_depot(depot.name, depot.annual_volume)
+        return {"id": depot_id, "message": "Depot created successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error creating depot: {str(e)}")
+
+@app.get("/api/depots/")
+async def get_depots(db: SupplierDatabase = Depends(get_db)):
+    """Get all depots"""
+    try:
+        depots = db.get_depots()
+        return {"depots": depots}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching depots: {str(e)}")
+
+# ============================================================================
+# SUPPLIER DATA SUBMISSION (from supplier_api.py)
+# ============================================================================
+
+@app.post("/api/suppliers/submit-data/")
+async def submit_supplier_data(submission: SupplierDataSubmission, db: SupplierDatabase = Depends(get_db)):
+    """Submit supplier data for a specific depot"""
+    try:
+        # Convert to dict for database storage
+        data = {
+            'coc_rebate': submission.coc_rebate,
+            'cost_of_collection': submission.cost_of_collection,
+            'del_rebate': submission.del_rebate,
+            'zone_differential': submission.zone_differential,
+            'distance_km': submission.distance_km
+        }
+        
+        submission_id = db.submit_supplier_data(
+            submission.supplier_id,
+            submission.depot_id,
+            data
+        )
+        
+        return {
+            "id": submission_id,
+            "message": "Data submitted successfully and pending approval"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error submitting data: {str(e)}")
+
+@app.post("/api/suppliers/submit-bulk-data/")
+async def submit_bulk_supplier_data(bulk_submission: BulkDataSubmission, db: SupplierDatabase = Depends(get_db)):
+    """Submit supplier data for multiple depots"""
+    try:
+        submission_ids = []
+        for depot_data in bulk_submission.submissions:
+            submission_id = db.submit_supplier_data(
+                bulk_submission.supplier_id,
+                depot_data['depot_id'],
+                depot_data
+            )
+            submission_ids.append(submission_id)
+        
+        return {
+            "ids": submission_ids,
+            "message": f"Bulk data submitted successfully for {len(submission_ids)} depots"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error submitting bulk data: {str(e)}")
+
+@app.get("/api/suppliers/{supplier_id}/submissions/")
+async def get_supplier_submissions(supplier_id: int, db: SupplierDatabase = Depends(get_db)):
+    """Get submissions for a specific supplier"""
+    try:
+        submissions = db.get_supplier_submissions(supplier_id=supplier_id)
+        return {"submissions": submissions}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching submissions: {str(e)}")
+
+# ============================================================================
+# ADMIN ENDPOINTS (from supplier_api.py)
+# ============================================================================
+
+@app.get("/api/admin/submissions/")
+async def get_all_submissions(status: Optional[str] = None, db: SupplierDatabase = Depends(get_db)):
+    """Get all submissions (admin only) with optional status filtering"""
+    try:
+        submissions = db.get_supplier_submissions(status=status)
+        return {"submissions": submissions}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching submissions: {str(e)}")
+
+@app.post("/api/admin/submissions/approve/")
+async def approve_submission(approval: ApprovalRequest, db: SupplierDatabase = Depends(get_db)):
+    """Approve a supplier submission (admin only)"""
+    try:
+        success = db.approve_submission(approval.submission_id, approval.approved_by)
+        if success:
+            return {"message": "Submission approved successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Submission not found")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error approving submission: {str(e)}")
+
+@app.post("/api/admin/submissions/reject/")
+async def reject_submission(rejection: ApprovalRequest, db: SupplierDatabase = Depends(get_db)):
+    """Reject a supplier submission (admin only)"""
+    try:
+        success = db.reject_submission(rejection.submission_id, rejection.approved_by)
+        if success:
+            return {"message": "Submission rejected successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Submission not found")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error rejecting submission: {str(e)}")
+
+@app.get("/api/admin/submissions/pending/")
+async def get_pending_submissions(db: SupplierDatabase = Depends(get_db)):
+    """Get all pending submissions (admin only)"""
+    try:
+        submissions = db.get_submissions_by_status('pending')
+        return submissions
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error fetching pending submissions: {str(e)}")
+
+@app.post("/api/admin/submissions/bulk-approve/")
+async def bulk_approve_supplier_submissions(approval: BulkApprovalRequest, db: SupplierDatabase = Depends(get_db)):
+    """Approve all pending submissions for a supplier (admin only)"""
+    try:
+        success = db.bulk_approve_supplier_submissions(approval.supplier_id, approval.approved_by)
+        if success:
+            return {"message": "All supplier submissions approved successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="No pending submissions found for this supplier")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error approving bulk submissions: {str(e)}")
+
+@app.post("/api/admin/submissions/bulk-reject/")
+async def bulk_reject_supplier_submissions(rejection: BulkApprovalRequest, db: SupplierDatabase = Depends(get_db)):
+    """Reject all pending submissions for a supplier (admin only)"""
+    try:
+        success = db.bulk_reject_supplier_submissions(rejection.supplier_id, rejection.approved_by)
+        if success:
+            return {"message": "All supplier submissions rejected successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="No pending submissions found for this supplier")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error rejecting bulk submissions: {str(e)}")
+
+@app.get("/api/admin/approved-data/")
+async def get_approved_optimization_data(db: SupplierDatabase = Depends(get_db)):
+    """Get all approved data ready for optimization"""
+    try:
+        # Get approved submissions with supplier and depot details
+        approved_data = db.get_approved_optimization_data()
+        return {"approved_data": approved_data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching approved data: {str(e)}")
+
+@app.post("/api/admin/cleanup-duplicates/")
+async def cleanup_duplicate_submissions(db: SupplierDatabase = Depends(get_db)):
+    """Clean up duplicate supplier-depot submissions (admin only)"""
+    try:
+        result = db.cleanup_duplicate_submissions()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error cleaning duplicates: {str(e)}")
+
+@app.get("/api/admin/validation/check-data/")
+async def validate_data_completeness(db: SupplierDatabase = Depends(get_db)):
+    """Check if all required data is complete for optimization"""
+    try:
+        suppliers = db.get_suppliers()
+        depots = db.get_depots()
+        submissions = db.get_supplier_submissions(status='approved')
+        # Skip scores check for now due to potential table corruption
+        # scores = db.get_supplier_scores()
+        
+        # Check completeness
+        missing_data = []
+        
+        # Check if all depots have annual volumes
+        for depot in depots:
+            if not depot['annual_volume']:
+                missing_data.append(f"Depot '{depot['name']}' missing annual volume")
+        
+        # Check depot-supplier coverage
+        supplier_depot_pairs = {(s['supplier_id'], s['depot_id']) for s in submissions}
+        total_possible_pairs = len(suppliers) * len(depots)
+        
+        return {
+            "is_complete": len(missing_data) == 0,
+            "missing_data": missing_data,
+            "statistics": {
+                "total_suppliers": len(suppliers),
+                "total_depots": len(depots),
+                "approved_submissions": len(submissions),
+                "suppliers_with_scores": 0,  # Disabled due to table corruption
+                "depot_supplier_pairs": len(supplier_depot_pairs),
+                "total_possible_pairs": total_possible_pairs,
+                "coverage_percentage": (len(supplier_depot_pairs) / total_possible_pairs * 100) if total_possible_pairs > 0 else 0
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error validating data: {str(e)}")
+
+# ============================================================================
+# SUPPLIER SCORES (from supplier_api.py)
+# ============================================================================
+
+@app.post("/api/suppliers/scores/")
+async def save_supplier_scores(scores: SupplierScores, db: SupplierDatabase = Depends(get_db)):
+    """Save supplier PROMETHEE II scores"""
+    try:
+        criteria_scores_json = json.dumps(scores.criteria_scores)
+        score_id = db.save_supplier_scores(
+            scores.supplier_id,
+            scores.total_score,
+            criteria_scores_json
+        )
+        return {"id": score_id, "message": "Scores saved successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error saving scores: {str(e)}")
+
+@app.get("/api/suppliers/scores/")
+async def get_supplier_scores(db: SupplierDatabase = Depends(get_db)):
+    """Get all supplier scores"""
+    try:
+        scores = db.get_supplier_scores()
+        # Parse JSON criteria scores
+        for score in scores:
+            if score['criteria_scores']:
+                score['criteria_scores'] = json.loads(score['criteria_scores'])
+        return {"scores": scores}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching scores: {str(e)}")
+
+# ============================================================================
+# EXPORT ENDPOINTS (from supplier_api.py)
+# ============================================================================
+
+@app.get("/api/admin/export/optimizer-data/")
+async def export_optimizer_data(db: SupplierDatabase = Depends(get_db)):
+    """Export data in optimizer format (admin only)"""
+    try:
+        data = db.export_to_optimizer_format()
+        return {
+            "message": "Data exported successfully",
+            "data": {
+                "obj1_coeff": data['Obj1_Coeff'].to_dict('records'),
+                "obj2_coeff": data['Obj2_Coeff'].to_dict('records'),
+                "annual_volumes": data['Annual Volumes'].to_dict('records')
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error exporting data: {str(e)}")
+
+@app.post("/api/admin/create-temp-excel/")
+async def create_temp_excel(db: SupplierDatabase = Depends(get_db)):
+    """Create temporary Excel file for optimizer (admin only)"""
+    try:
+        temp_file = db.create_temporary_excel_file()
+        return {
+            "message": "Temporary Excel file created successfully",
+            "file_path": temp_file
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating Excel file: {str(e)}")
+
+# ============================================================================
+# Legacy AHP endpoints removed - now using PROMETHEE II
+
+# ============================================================================
+# OPTIMIZATION ENDPOINTS (from backend_api.py)
+# ============================================================================
 
 @app.post("/api/optimization/initialize", response_model=OptimizerInitResponse)
 async def initialize_optimizer(request: OptimizerInitRequest):
@@ -584,7 +867,9 @@ async def get_ranking_analysis(solution_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting ranking analysis: {str(e)}")
 
-# Depot Evaluation and PROMETHEE II Endpoints
+# ============================================================================
+# DEPOT EVALUATION ENDPOINTS (from backend_api.py)
+# ============================================================================
 
 @app.post("/api/depot-evaluations/submit")
 async def submit_depot_evaluation(request: DepotEvaluationRequest):
@@ -640,6 +925,19 @@ async def get_evaluation_summary():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting evaluation summary: {str(e)}")
 
+@app.delete("/api/depot-evaluations/clear")
+async def clear_depot_evaluations():
+    """Clear all depot evaluations"""
+    try:
+        result = db.clear_depot_evaluations()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing depot evaluations: {str(e)}")
+
+# ============================================================================
+# PROMETHEE II ENDPOINTS (from backend_api.py)
+# ============================================================================
+
 @app.post("/api/promethee/calculate")
 async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
     """Calculate PROMETHEE II ranking for suppliers"""
@@ -653,6 +951,7 @@ async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
         # Convert to format expected by PROMETHEE calculation
         supplier_scores = {}
         confidence_levels = {}
+        missing_evaluations = []
         
         for supplier_id, criteria_data in aggregated_scores.items():
             supplier_scores[supplier_id] = {}
@@ -663,9 +962,31 @@ async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
                     supplier_scores[supplier_id][criterion_name] = criteria_data[criterion_name]['score']
                     confidence_levels[supplier_id].append(criteria_data[criterion_name]['confidence'])
                 else:
-                    # Use default score if no evaluations for this criterion
-                    supplier_scores[supplier_id][criterion_name] = 5.0
-                    confidence_levels[supplier_id].append(0.0)
+                    # Track missing evaluations instead of using default scores
+                    missing_evaluations.append({
+                        'supplier_id': supplier_id,
+                        'criterion_name': criterion_name
+                    })
+        
+        # Check if there are any missing evaluations
+        if missing_evaluations:
+            # Get supplier names for better error messages
+            suppliers_data = db.get_suppliers()
+            supplier_names = {s['id']: s['name'] for s in suppliers_data}
+            
+            missing_details = []
+            for missing in missing_evaluations:
+                supplier_name = supplier_names.get(missing['supplier_id'], f"Supplier {missing['supplier_id']}")
+                missing_details.append(f"- {supplier_name}: {missing['criterion_name']}")
+            
+            error_message = (
+                f"⚠️ PROMETHEE II calculation cannot proceed with missing evaluations.\n\n"
+                f"Missing evaluations ({len(missing_evaluations)} total):\n" +
+                "\n".join(missing_details) +
+                f"\n\nPlease ensure all suppliers have been evaluated on all criteria before running PROMETHEE II analysis."
+            )
+            
+            raise HTTPException(status_code=400, detail=error_message)
         
         # Convert criteria weights to dict
         criteria_weights = dict(zip(request.criteria_names, request.criteria_weights))
@@ -717,6 +1038,10 @@ async def get_promethee_results():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting PROMETHEE results: {str(e)}")
 
+# ============================================================================
+# HEALTH CHECK
+# ============================================================================
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
@@ -724,7 +1049,8 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "active_optimizers": len(optimizer_instances),
-        "stored_results": len(optimization_results)
+        "stored_results": len(optimization_results),
+        "database": "connected"
     }
 
 if __name__ == "__main__":

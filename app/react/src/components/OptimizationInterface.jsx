@@ -32,7 +32,7 @@ const { Title, Text } = Typography
 const { Panel } = Collapse
 const { Option } = Select
 
-const OptimizationInterface = ({ ahpResults }) => {
+const OptimizationInterface = ({ prometheeResults }) => {
   const [filePath, setFilePath] = useState("/mnt/c/Users/blake/OneDrive - Stellenbosch University/SUN 2/2025/Skripsie/Demo Data/Demo3.xlsx")
   const [sheetNames, setSheetNames] = useState({
     obj1: 'Obj1_Coeff',
@@ -168,11 +168,11 @@ const OptimizationInterface = ({ ahpResults }) => {
     }
   }
 
-  const renderAHPSummary = () => {
-    if (!ahpResults) {
+  const renderPrometheeSummary = () => {
+    if (!prometheeResults) {
       return (
         <Alert
-          message="💡 Complete the AHP scoring first to see supplier rankings here."
+          message="💡 Complete the PROMETHEE scoring first to see supplier rankings here."
           type="info"
           showIcon
           style={{ marginBottom: 24 }}
@@ -180,10 +180,10 @@ const OptimizationInterface = ({ ahpResults }) => {
       )
     }
 
-    const ahpData = ahpResults.suppliers.map((supplier, index) => ({
+    const prometheeData = prometheeResults.suppliers.map((supplier, index) => ({
       key: index,
-      supplier,
-      score: ahpResults.scores[index].toFixed(2)
+      supplier: prometheeResults.supplier_names[index],
+      score: prometheeResults.net_flows[index].toFixed(3)
     })).sort((a, b) => parseFloat(b.score) - parseFloat(a.score))
 
     const columns = [
@@ -193,31 +193,31 @@ const OptimizationInterface = ({ ahpResults }) => {
         key: 'supplier',
       },
       {
-        title: 'AHP Score',
+        title: 'PROMETHEE Net Flow',
         dataIndex: 'score',
         key: 'score',
       }
     ]
 
     const barData = [{
-      x: ahpData.map(r => r.supplier),
-      y: ahpData.map(r => parseFloat(r.score)),
+      x: prometheeData.map(r => r.supplier),
+      y: prometheeData.map(r => parseFloat(r.score)),
       type: 'bar',
       marker: { color: 'rgba(54, 162, 235, 0.8)' }
     }]
 
     const barLayout = {
-      title: 'AHP Supplier Rankings',
+      title: 'PROMETHEE Supplier Rankings',
       height: 300,
       margin: { t: 40, b: 40, l: 40, r: 40 }
     }
 
     return (
-      <Card title="📊 AHP Results Summary" style={{ marginBottom: 24 }}>
+      <Card title="📊 PROMETHEE Results Summary" style={{ marginBottom: 24 }}>
         <Row gutter={24}>
           <Col span={12}>
             <Table 
-              dataSource={ahpData} 
+              dataSource={prometheeData} 
               columns={columns} 
               pagination={false}
               size="small"
@@ -652,7 +652,7 @@ const OptimizationInterface = ({ ahpResults }) => {
         Multi-objective optimization using ε-Constraint method with selective NA handling
       </Text>
 
-      {renderAHPSummary()}
+      {renderPrometheeSummary()}
 
       <Row gutter={24}>
         <Col span={6}>

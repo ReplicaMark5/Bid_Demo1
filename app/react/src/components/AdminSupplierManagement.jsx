@@ -27,13 +27,15 @@ import {
   CloseCircleOutlined,
   ClockCircleOutlined,
   EyeOutlined,
+  DeleteOutlined,
   UserOutlined,
   HomeOutlined,
   PlusOutlined,
   BarChartOutlined,
   SettingOutlined,
   CheckOutlined,
-  CloseOutlined
+  CloseOutlined,
+  CalculatorOutlined
 } from '@ant-design/icons'
 
 const { Title, Text } = Typography
@@ -44,6 +46,7 @@ const AdminSupplierManagement = () => {
   const [depots, setDepots] = useState([])
   const [submissions, setSubmissions] = useState([])
   const [approvedData, setApprovedData] = useState([])
+  const [depotEvaluations, setDepotEvaluations] = useState([])
   const [loading, setLoading] = useState(false)
   const [validationData, setValidationData] = useState(null)
   const [detailsModal, setDetailsModal] = useState({ visible: false, submission: null })
@@ -62,6 +65,7 @@ const AdminSupplierManagement = () => {
     fetchDepots()
     fetchValidationData()
     fetchApprovedData()
+    fetchDepotEvaluations()
     
     // Load AHP config from localStorage
     const savedConfig = localStorage.getItem('ahpConfig')
@@ -81,7 +85,7 @@ const AdminSupplierManagement = () => {
 
   const fetchSubmissions = async () => {
     try {
-      const response = await fetch('http://localhost:8001/api/admin/submissions/')
+      const response = await fetch('http://localhost:8000/api/admin/submissions/')
       const data = await response.json()
       setSubmissions(data.submissions || [])
     } catch (error) {
@@ -91,7 +95,7 @@ const AdminSupplierManagement = () => {
 
   const fetchSuppliers = async () => {
     try {
-      const response = await fetch('http://localhost:8001/api/suppliers/')
+      const response = await fetch('http://localhost:8000/api/suppliers/')
       const data = await response.json()
       const supplierList = data.suppliers || []
       setSuppliers(supplierList)
@@ -118,7 +122,7 @@ const AdminSupplierManagement = () => {
 
   const fetchDepots = async () => {
     try {
-      const response = await fetch('http://localhost:8001/api/depots/')
+      const response = await fetch('http://localhost:8000/api/depots/')
       const data = await response.json()
       setDepots(data.depots || [])
     } catch (error) {
@@ -128,7 +132,7 @@ const AdminSupplierManagement = () => {
 
   const fetchValidationData = async () => {
     try {
-      const response = await fetch('http://localhost:8001/api/admin/validation/check-data/')
+      const response = await fetch('http://localhost:8000/api/admin/validation/check-data/')
       const data = await response.json()
       setValidationData(data)
     } catch (error) {
@@ -138,18 +142,50 @@ const AdminSupplierManagement = () => {
 
   const fetchApprovedData = async () => {
     try {
-      const response = await fetch('http://localhost:8001/api/admin/approved-data/')
+      const response = await fetch('http://localhost:8000/api/admin/approved-data/')
       const data = await response.json()
-      setApprovedData(data.approved_data || [])
+      
+      // Debug: Check for duplicates
+      const approvedData = data.approved_data || []
+      const submissionIds = approvedData.map(item => item.submission_id)
+      const duplicates = submissionIds.filter((id, index) => submissionIds.indexOf(id) !== index)
+      if (duplicates.length > 0) {
+        console.warn('⚠️ Duplicate submission IDs found:', duplicates)
+        console.warn('📊 Full data:', approvedData)
+      }
+      
+      setApprovedData(approvedData)
     } catch (error) {
       console.error('Error fetching approved data:', error)
     }
   }
 
+  const fetchDepotEvaluations = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/depot-evaluations/')
+      const data = await response.json()
+      setDepotEvaluations(data.evaluations || [])
+    } catch (error) {
+      console.error('Error fetching depot evaluations:', error)
+    }
+  }
 
   const handleBulkApprove = async (supplierId) => {
     try {
-      const response = await fetch('http://localhost:8001/api/admin/submissions/bulk-approve/', {
+      // Check for potential duplicates before approving
+      const pendingSubmissions = submissions.filter(s => s.supplier_id === supplierId && s.status === 'pending')
+      const alreadyApproved = approvedData.filter(a => a.supplier_id === supplierId)
+      
+      const duplicateDepots = pendingSubmissions.filter(pending => 
+        alreadyApproved.some(approved => approved.depot_id === pending.depot_id)
+      ).map(d => d.depot_name)
+      
+      if (duplicateDepots.length > 0) {
+        message.warning(`⚠️ Duplicate detected: Supplier already has approved submissions for depot(s): ${duplicateDepots.join(', ')}. Please review manually.`)
+        return
+      }
+
+      const response = await fetch('http://localhost:8000/api/admin/submissions/bulk-approve/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -172,7 +208,7 @@ const AdminSupplierManagement = () => {
 
   const handleBulkReject = async (supplierId) => {
     try {
-      const response = await fetch('http://localhost:8001/api/admin/submissions/bulk-reject/', {
+      const response = await fetch('http://localhost:8000/api/admin/submissions/bulk-reject/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -195,7 +231,7 @@ const AdminSupplierManagement = () => {
 
   const createSupplier = async (values) => {
     try {
-      const response = await fetch('http://localhost:8001/api/suppliers/', {
+      const response = await fetch('http://localhost:8000/api/suppliers/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values)
@@ -215,7 +251,7 @@ const AdminSupplierManagement = () => {
 
   const createDepot = async (values) => {
     try {
-      const response = await fetch('http://localhost:8001/api/depots/', {
+      const response = await fetch('http://localhost:8000/api/depots/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values)
@@ -232,6 +268,26 @@ const AdminSupplierManagement = () => {
       }
     } catch (error) {
       message.error('Error creating depot')
+    }
+  }
+
+  const handleCleanupDuplicates = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/admin/cleanup-duplicates/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        message.success(`${result.message}. Cleaned ${result.cleaned} duplicate submissions.`)
+        fetchApprovedData()
+        fetchDepotEvaluations()
+      } else {
+        message.error('Failed to clean duplicates')
+      }
+    } catch (error) {
+      message.error('Error cleaning duplicates')
     }
   }
 
@@ -302,7 +358,7 @@ const AdminSupplierManagement = () => {
     const fetchPendingSubmissions = async () => {
       try {
         setLoading(true)
-        const response = await fetch('http://localhost:8001/api/admin/submissions/pending/')
+        const response = await fetch('http://localhost:8000/api/admin/submissions/pending/')
         
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`)
@@ -696,7 +752,21 @@ const AdminSupplierManagement = () => {
     return (
       <Card 
         title="Approved Optimization Data" 
-        extra={<CheckCircleOutlined style={{ color: '#52c41a' }} />}
+        extra={
+          <div>
+            <Button
+              type="primary"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={handleCleanupDuplicates}
+              style={{ marginRight: 8 }}
+              size="small"
+            >
+              Clean Duplicates
+            </Button>
+            <CheckCircleOutlined style={{ color: '#52c41a' }} />
+          </div>
+        }
       >
         <Alert
           message={`${approvedData.length} approved supplier-depot combinations ready for optimization`}
@@ -707,7 +777,14 @@ const AdminSupplierManagement = () => {
         <Table
           columns={columns}
           dataSource={approvedData}
-          rowKey={(record, index) => `approved-${record.submission_id || 'nosub'}-${record.supplier_id || 'nosup'}-${record.depot_id || 'nodep'}-${index}`}
+          rowKey={(record) => {
+            // Use submission_id with additional unique fields to handle duplicates
+            if (record.submission_id) {
+              return `submission-${record.submission_id}-${record.supplier_id}-${record.depot_id}`;
+            }
+            // For records without submission_id, use composite key with timestamp
+            return `${record.supplier_id || 'unknown'}-${record.depot_id || 'unknown'}-${record.submitted_at || record.approved_at || Math.random()}`;
+          }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
@@ -715,6 +792,120 @@ const AdminSupplierManagement = () => {
             showTotal: (total) => `Total ${total} items`
           }}
           scroll={{ x: 1200 }}
+          size="small"
+        />
+      </Card>
+    )
+  }
+
+  const DepotEvaluations = () => {
+    const columns = [
+      {
+        title: 'Depot',
+        dataIndex: 'depot_name',
+        key: 'depot_name',
+        sorter: (a, b) => a.depot_name.localeCompare(b.depot_name),
+      },
+      {
+        title: 'Supplier',
+        dataIndex: 'supplier_name',
+        key: 'supplier_name',
+        sorter: (a, b) => a.supplier_name.localeCompare(b.supplier_name),
+      },
+      {
+        title: 'Criterion',
+        dataIndex: 'criterion_name',
+        key: 'criterion_name',
+        sorter: (a, b) => a.criterion_name.localeCompare(b.criterion_name),
+      },
+      {
+        title: 'Score',
+        dataIndex: 'score',
+        key: 'score',
+        render: (value) => (
+          <Tag color={value >= 7 ? 'green' : value >= 5 ? 'orange' : 'red'}>
+            {value.toFixed(1)}
+          </Tag>
+        ),
+        sorter: (a, b) => a.score - b.score,
+      },
+      {
+        title: 'Manager',
+        dataIndex: 'manager_name',
+        key: 'manager_name',
+        render: (value) => value || 'N/A',
+      },
+      {
+        title: 'Submitted',
+        dataIndex: 'submitted_at',
+        key: 'submitted_at',
+        render: (value) => new Date(value).toLocaleDateString(),
+        sorter: (a, b) => new Date(a.submitted_at) - new Date(b.submitted_at),
+      }
+    ]
+
+    return (
+      <Card 
+        title="Depot Manager Evaluations" 
+        extra={
+          <div>
+            <Button
+              type="primary"
+              icon={<BarChartOutlined />}
+              onClick={fetchDepotEvaluations}
+              style={{ marginRight: 8 }}
+              size="small"
+            >
+              Refresh
+            </Button>
+            <Button
+              type="primary"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => {
+                Modal.confirm({
+                  title: 'Clear All Depot Evaluations',
+                  content: (
+                    <div>
+                      <p>⚠️ <strong>This will permanently delete all depot evaluations!</strong></p>
+                      <p>This action cannot be undone. All supplier scoring data from depot managers will be lost.</p>
+                      <p>Are you sure you want to proceed?</p>
+                    </div>
+                  ),
+                  okText: 'Yes, Clear All',
+                  cancelText: 'Cancel',
+                  okType: 'danger',
+                  onOk: async () => {
+                    await clearDepotEvaluations()
+                  }
+                })
+              }}
+              style={{ marginRight: 8 }}
+              size="small"
+            >
+              Clear All
+            </Button>
+            <UserOutlined style={{ color: '#1890ff' }} />
+          </div>
+        }
+      >
+        <Alert
+          message={`${depotEvaluations.length} depot evaluations submitted for PROMETHEE II analysis`}
+          type="info"
+          style={{ marginBottom: 16 }}
+          showIcon
+        />
+        <Table
+          columns={columns}
+          dataSource={depotEvaluations}
+          rowKey={(record) => `eval-${record.depot_id}-${record.supplier_id}-${record.criterion_name}`}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (total) => `Total ${total} evaluations`
+          }}
+          scroll={{ x: 800 }}
           size="small"
         />
       </Card>
@@ -730,6 +921,8 @@ const AdminSupplierManagement = () => {
     })
     const [tempCriteriaNames, setTempCriteriaNames] = useState([...ahpConfig.criteriaNames])
     const [tempCriteriaWeights, setTempCriteriaWeights] = useState([...ahpConfig.criteriaWeights])
+    const [pairwiseMatrix, setPairwiseMatrix] = useState([])
+    const [calculatedWeights, setCalculatedWeights] = useState([])
     
     // Update temp state when ahpConfig changes
     useEffect(() => {
@@ -738,9 +931,84 @@ const AdminSupplierManagement = () => {
       })
       setTempCriteriaNames([...ahpConfig.criteriaNames])
       setTempCriteriaWeights([...ahpConfig.criteriaWeights])
+      initializePairwiseMatrix(ahpConfig.numCriteria)
     }, [ahpConfig])
     
-    const updateBasicConfig = () => {
+    const initializePairwiseMatrix = (numCriteria) => {
+      const matrix = Array(numCriteria).fill(null).map(() => Array(numCriteria).fill(1))
+      setPairwiseMatrix(matrix)
+    }
+    
+    const updatePairwiseValue = (i, j, value) => {
+      const newMatrix = [...pairwiseMatrix]
+      newMatrix[i][j] = value
+      newMatrix[j][i] = 1 / value // Reciprocal value
+      setPairwiseMatrix(newMatrix)
+    }
+    
+    const calculateAHPWeights = () => {
+      if (pairwiseMatrix.length === 0) return
+      
+      const n = pairwiseMatrix.length
+      const normalizedMatrix = Array(n).fill(null).map(() => Array(n).fill(0))
+      
+      // Normalize each column
+      for (let j = 0; j < n; j++) {
+        const columnSum = pairwiseMatrix.reduce((sum, row) => sum + row[j], 0)
+        for (let i = 0; i < n; i++) {
+          normalizedMatrix[i][j] = pairwiseMatrix[i][j] / columnSum
+        }
+      }
+      
+      // Calculate row averages (weights)
+      const weights = normalizedMatrix.map(row => 
+        row.reduce((sum, val) => sum + val, 0) / n
+      )
+      
+      setCalculatedWeights(weights)
+      setTempCriteriaWeights(weights)
+    }
+    
+    const clearDepotEvaluations = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/depot-evaluations/clear', {
+          method: 'DELETE'
+        })
+        const result = await response.json()
+        
+        if (response.ok) {
+          message.success(`${result.cleared_count} depot evaluations cleared successfully!`)
+          fetchDepotEvaluations() // Refresh the depot evaluations list
+        } else {
+          throw new Error(result.detail || 'Failed to clear evaluations')
+        }
+      } catch (error) {
+        console.error('Error clearing depot evaluations:', error)
+        message.error('Failed to clear depot evaluations')
+      }
+    }
+
+    const showBasicConfigWarning = () => {
+      Modal.confirm({
+        title: 'Warning: Configuration Change',
+        content: (
+          <div>
+            <p>⚠️ <strong>All supplier scoring will be cleared!</strong></p>
+            <p>Changing the basic configuration (number of criteria) will invalidate all existing depot manager evaluations. This action cannot be undone.</p>
+            <p>Are you sure you want to proceed?</p>
+          </div>
+        ),
+        okText: 'Yes, Clear All Evaluations',
+        cancelText: 'Cancel',
+        okType: 'danger',
+        onOk: async () => {
+          await clearDepotEvaluations()
+          updateBasicConfigInternal()
+        }
+      })
+    }
+
+    const updateBasicConfigInternal = () => {
       console.log('updateBasicConfig called:', tempConfig)
       let newConfig = { ...ahpConfig, ...tempConfig }
       
@@ -784,7 +1052,36 @@ const AdminSupplierManagement = () => {
       message.success('Basic configuration updated successfully!')
     }
 
-    const updateCriteriaNames = () => {
+    const updateBasicConfig = () => {
+      // Check if any criteria change will happen
+      if (tempConfig.numCriteria !== ahpConfig.numCriteria) {
+        showBasicConfigWarning()
+      } else {
+        updateBasicConfigInternal()
+      }
+    }
+
+    const showCriteriaNamesWarning = () => {
+      Modal.confirm({
+        title: 'Warning: Criteria Names Change',
+        content: (
+          <div>
+            <p>⚠️ <strong>All supplier scoring will be cleared!</strong></p>
+            <p>Changing criteria names will invalidate all existing depot manager evaluations. This action cannot be undone.</p>
+            <p>Are you sure you want to proceed?</p>
+          </div>
+        ),
+        okText: 'Yes, Clear All Evaluations',
+        cancelText: 'Cancel',
+        okType: 'danger',
+        onOk: async () => {
+          await clearDepotEvaluations()
+          updateCriteriaNamesInternal()
+        }
+      })
+    }
+
+    const updateCriteriaNamesInternal = () => {
       console.log('updateCriteriaNames called:', tempCriteriaNames)
       const newConfig = { ...ahpConfig, criteriaNames: tempCriteriaNames }
       setAhpConfig(newConfig)
@@ -798,6 +1095,18 @@ const AdminSupplierManagement = () => {
       }))
       
       message.success('Criteria names updated successfully!')
+    }
+
+    const updateCriteriaNames = () => {
+      // Check if criteria names actually changed
+      const currentNames = ahpConfig.criteriaNames || []
+      const hasChanges = tempCriteriaNames.some((name, index) => name !== currentNames[index])
+      
+      if (hasChanges) {
+        showCriteriaNamesWarning()
+      } else {
+        updateCriteriaNamesInternal()
+      }
     }
 
     const updateCriteriaWeights = () => {
@@ -920,29 +1229,115 @@ const AdminSupplierManagement = () => {
       </Card>
 
       <Card title="Step 2: Assign Criteria Weights (Relative Importance)" style={{ marginTop: 24 }}>
-        <Row gutter={[16, 16]}>
-          {tempCriteriaNames.map((name, index) => (
-            <Col span={8} key={index}>
-              <Text strong>Weight for '{name}':</Text>
-              <InputNumber
-                min={0}
-                step={0.1}
-                value={tempCriteriaWeights[index]}
-                onChange={(value) => {
-                  const newWeights = [...tempCriteriaWeights]
-                  newWeights[index] = value || 1.0
-                  setTempCriteriaWeights(newWeights)
-                }}
-                style={{ width: '100%', marginTop: 8 }}
-              />
-            </Col>
-          ))}
-        </Row>
+        <Alert
+          style={{ marginBottom: 16 }}
+          message="AHP Pairwise Comparison Matrix"
+          description="Compare each pair of criteria using the scale below. For each cell, select how much more important the row criterion is compared to the column criterion. Use reciprocal values (1/2, 1/3, etc.) when the row criterion is less important than the column criterion."
+          type="info"
+          showIcon
+        />
+        
+        <div style={{ marginBottom: 16, padding: 16, backgroundColor: '#f9f9f9', borderRadius: 6 }}>
+          <Text strong style={{ display: 'block', marginBottom: 8 }}>Interpretation of Entries in Pairwise Comparison Matrix:</Text>
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
+            <li><strong>1:</strong> Criteria are of equal importance</li>
+            <li><strong>3:</strong> Row criterion is weakly more important than column criterion</li>
+            <li><strong>5:</strong> Experience and judgment indicate that row criterion is strongly more important than column criterion</li>
+            <li><strong>7:</strong> Row criterion is very strongly or demonstrably more important than column criterion</li>
+            <li><strong>9:</strong> Row criterion is absolutely more important than column criterion</li>
+            <li><strong>2, 4, 6, 8:</strong> Intermediate values—for example, a value of 8 means that row criterion is midway between strongly and absolutely more important than column criterion</li>
+            <li><strong>1/2, 1/3, 1/4, etc.:</strong> Use reciprocal values when the row criterion is less important than the column criterion</li>
+          </ul>
+        </div>
+        
+        <div style={{ overflowX: 'auto', marginBottom: 16 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #d9d9d9', padding: '8px', background: '#fafafa' }}></th>
+                {tempCriteriaNames.map((name, index) => (
+                  <th key={index} style={{ border: '1px solid #d9d9d9', padding: '8px', background: '#fafafa', textAlign: 'center' }}>
+                    {name}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {tempCriteriaNames.map((rowName, i) => (
+                <tr key={i}>
+                  <td style={{ border: '1px solid #d9d9d9', padding: '8px', background: '#fafafa', fontWeight: 'bold' }}>
+                    {rowName}
+                  </td>
+                  {tempCriteriaNames.map((colName, j) => (
+                    <td key={j} style={{ border: '1px solid #d9d9d9', padding: '8px', textAlign: 'center' }}>
+                      {i === j ? (
+                        <span style={{ fontWeight: 'bold' }}>1</span>
+                      ) : i < j ? (
+                        <Select
+                          value={pairwiseMatrix[i]?.[j] || 1}
+                          onChange={(value) => updatePairwiseValue(i, j, value)}
+                          style={{ width: '80px' }}
+                        >
+                          <Option value={1/9}>1/9</Option>
+                          <Option value={1/8}>1/8</Option>
+                          <Option value={1/7}>1/7</Option>
+                          <Option value={1/6}>1/6</Option>
+                          <Option value={1/5}>1/5</Option>
+                          <Option value={1/4}>1/4</Option>
+                          <Option value={1/3}>1/3</Option>
+                          <Option value={1/2}>1/2</Option>
+                          <Option value={1}>1</Option>
+                          <Option value={2}>2</Option>
+                          <Option value={3}>3</Option>
+                          <Option value={4}>4</Option>
+                          <Option value={5}>5</Option>
+                          <Option value={6}>6</Option>
+                          <Option value={7}>7</Option>
+                          <Option value={8}>8</Option>
+                          <Option value={9}>9</Option>
+                        </Select>
+                      ) : (
+                        <span style={{ color: '#666' }}>
+                          {pairwiseMatrix[i]?.[j] ? (1 / pairwiseMatrix[j][i]).toFixed(2) : '1.00'}
+                        </span>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        
+        <Button 
+          type="primary" 
+          onClick={calculateAHPWeights}
+          style={{ marginBottom: 16 }}
+          icon={<CalculatorOutlined />}
+        >
+          Calculate Weights from Matrix
+        </Button>
+        
+        {calculatedWeights.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <Title level={5}>Calculated Weights:</Title>
+            <Row gutter={[16, 8]}>
+              {tempCriteriaNames.map((name, index) => (
+                <Col span={8} key={index}>
+                  <Text strong>{name}:</Text>
+                  <Text style={{ marginLeft: 8 }}>{(calculatedWeights[index] * 100).toFixed(1)}%</Text>
+                </Col>
+              ))}
+            </Row>
+          </div>
+        )}
+        
         <Button 
           type="primary" 
           onClick={updateCriteriaWeights}
           style={{ width: '100%', marginTop: 16 }}
           icon={<CheckOutlined />}
+          disabled={calculatedWeights.length === 0}
         >
           Update Criteria Weights
         </Button>
@@ -982,6 +1377,16 @@ const AdminSupplierManagement = () => {
               </span>
             ),
             children: <ApprovedData />
+          },
+          {
+            key: 'evaluations',
+            label: (
+              <span>
+                <UserOutlined />
+                Depot Evaluations
+              </span>
+            ),
+            children: <DepotEvaluations />
           },
           {
             key: 'validation',
