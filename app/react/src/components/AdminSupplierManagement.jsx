@@ -35,7 +35,8 @@ import {
   SettingOutlined,
   CheckOutlined,
   CloseOutlined,
-  CalculatorOutlined
+  CalculatorOutlined,
+  EditOutlined
 } from '@ant-design/icons'
 
 const { Title, Text } = Typography
@@ -50,11 +51,21 @@ const AdminSupplierManagement = () => {
   const [loading, setLoading] = useState(false)
   const [validationData, setValidationData] = useState(null)
   const [detailsModal, setDetailsModal] = useState({ visible: false, submission: null })
-  const [ahpConfig, setAhpConfig] = useState({ 
+  const [criteriaWarningModal, setCriteriaWarningModal] = useState({ 
+    visible: false, 
+    type: null, // 'basic' or 'names'
+    pendingConfig: null 
+  })
+  const [bwmConfig, setBwmConfig] = useState({ 
     numCriteria: 3, 
     criteriaNames: ['Criteria 1', 'Criteria 2', 'Criteria 3'],
     criteriaWeights: [1.0, 1.0, 1.0],
-    supplierNames: []
+    supplierNames: [],
+    bestCriterion: null,
+    worstCriterion: null,
+    bestToOthers: {},
+    othersToWorst: {},
+    consistencyRatio: null
   })
   const [newSupplierForm] = Form.useForm()
   const [newDepotForm] = Form.useForm()
@@ -67,8 +78,8 @@ const AdminSupplierManagement = () => {
     fetchApprovedData()
     fetchDepotEvaluations()
     
-    // Load AHP config from localStorage
-    const savedConfig = localStorage.getItem('ahpConfig')
+    // Load BWM config from localStorage
+    const savedConfig = localStorage.getItem('bwmConfig')
     if (savedConfig) {
       const config = JSON.parse(savedConfig)
       // Ensure arrays exist and have correct length
@@ -78,8 +89,14 @@ const AdminSupplierManagement = () => {
       if (!config.criteriaWeights || config.criteriaWeights.length !== config.numCriteria) {
         config.criteriaWeights = Array(config.numCriteria || 3).fill(1.0)
       }
+      // Initialize BWM-specific fields if not present
+      if (!config.bestCriterion) config.bestCriterion = null
+      if (!config.worstCriterion) config.worstCriterion = null
+      if (!config.bestToOthers) config.bestToOthers = {}
+      if (!config.othersToWorst) config.othersToWorst = {}
+      if (!config.consistencyRatio) config.consistencyRatio = null
       // Don't override supplierNames from localStorage - we'll populate from database
-      setAhpConfig(config)
+      setBwmConfig(config)
     }
   }, [])
 
@@ -100,15 +117,15 @@ const AdminSupplierManagement = () => {
       const supplierList = data.suppliers || []
       setSuppliers(supplierList)
       
-      // Update AHP config with real supplier names
+      // Update BWM config with real supplier names
       const supplierNames = supplierList.map(supplier => supplier.name)
-      setAhpConfig(prev => {
+      setBwmConfig(prev => {
         const newConfig = { ...prev, supplierNames }
-        localStorage.setItem('ahpConfig', JSON.stringify(newConfig))
+        localStorage.setItem('bwmConfig', JSON.stringify(newConfig))
         
         // Trigger storage event for cross-component sync
         window.dispatchEvent(new StorageEvent('storage', {
-          key: 'ahpConfig',
+          key: 'bwmConfig',
           newValue: JSON.stringify(newConfig),
           storageArea: localStorage
         }))
@@ -645,18 +662,100 @@ const AdminSupplierManagement = () => {
           <Form form={newDepotForm} onFinish={createDepot} layout="vertical">
             <Form.Item
               name="name"
-              label="Depot Name"
-              rules={[{ required: true, message: 'Please enter depot name' }]}
+              label="Site Name"
+              rules={[{ required: true, message: 'Please enter site name' }]}
             >
-              <Input placeholder="Enter depot name" />
+              <Input placeholder="Enter site name" />
+            </Form.Item>
+            <Form.Item
+              name="country"
+              label="Country"
+              rules={[{ required: true, message: 'Please enter country' }]}
+            >
+              <Input placeholder="Enter country" />
+            </Form.Item>
+            <Form.Item
+              name="town"
+              label="Town"
+              rules={[{ required: true, message: 'Please enter town' }]}
+            >
+              <Input placeholder="Enter town" />
+            </Form.Item>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item
+                  name="lats"
+                  label="Latitude"
+                  rules={[{ required: true, message: 'Please enter latitude' }]}
+                >
+                  <InputNumber 
+                    placeholder="Enter latitude" 
+                    style={{ width: '100%' }}
+                    step={0.000001}
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item
+                  name="longs"
+                  label="Longitude"
+                  rules={[{ required: true, message: 'Please enter longitude' }]}
+                >
+                  <InputNumber 
+                    placeholder="Enter longitude" 
+                    style={{ width: '100%' }}
+                    step={0.000001}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item
+              name="fuel_zone"
+              label="Fuel Zone"
+              rules={[{ required: true, message: 'Please enter fuel zone' }]}
+            >
+              <Input placeholder="Enter fuel zone" />
+            </Form.Item>
+            <Form.Item
+              name="tankage_size"
+              label="Tankage Size (LT)"
+              rules={[{ required: true, message: 'Please enter tankage size' }]}
+            >
+              <InputNumber 
+                placeholder="Enter tankage size" 
+                style={{ width: '100%' }}
+                min={0}
+              />
+            </Form.Item>
+            <Form.Item
+              name="number_of_pumps"
+              label="Number of Pumps"
+              rules={[{ required: true, message: 'Please enter number of pumps' }]}
+            >
+              <InputNumber 
+                placeholder="Enter number of pumps" 
+                style={{ width: '100%' }}
+                min={0}
+              />
             </Form.Item>
             <Form.Item
               name="annual_volume"
-              label="Annual Volume (Litres)"
+              label="Annual Volume (LT)"
               rules={[{ required: true, message: 'Please enter annual volume' }]}
             >
               <InputNumber 
                 placeholder="Enter annual volume" 
+                style={{ width: '100%' }}
+                min={0}
+              />
+            </Form.Item>
+            <Form.Item
+              name="equipment_value"
+              label="Equipment Value - Estimate"
+              rules={[{ required: true, message: 'Please enter equipment value' }]}
+            >
+              <InputNumber 
+                placeholder="Enter equipment value" 
                 style={{ width: '100%' }}
                 min={0}
               />
@@ -912,62 +1011,97 @@ const AdminSupplierManagement = () => {
     )
   }
 
-  const AHPConfiguration = () => {
-    console.log('AHPConfiguration render - current ahpConfig:', ahpConfig)
+  const confirmCriteriaUpdate = async () => {
+    try {
+      setLoading(true)
+      
+      const { pendingConfig, type } = criteriaWarningModal
+      
+      // Call backend API to clear evaluations and update criteria
+      const response = await fetch('http://localhost:8000/api/criteria/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          old_criteria_names: bwmConfig.criteriaNames,
+          new_criteria_names: pendingConfig.criteriaNames,
+          default_score: 5.0
+        })
+      })
+      
+      if (!response.ok) {
+        throw new Error('Failed to update criteria configuration')
+      }
+      
+      const result = await response.json()
+      
+      // Update config with new values
+      const newConfig = {
+        ...bwmConfig,
+        numCriteria: pendingConfig.numCriteria,
+        criteriaNames: pendingConfig.criteriaNames,
+        criteriaWeights: Array(pendingConfig.numCriteria).fill(1.0),
+        // Reset BWM-specific values when changing criteria
+        bestCriterion: null,
+        worstCriterion: null,
+        bestToOthers: {},
+        othersToWorst: {},
+        consistencyRatio: null
+      }
+      
+      setBwmConfig(newConfig)
+      localStorage.setItem('bwmConfig', JSON.stringify(newConfig))
+      
+      // Trigger storage event for cross-component sync
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'bwmConfig',
+        newValue: JSON.stringify(newConfig),
+        storageArea: localStorage
+      }))
+      
+      // Close modal
+      setCriteriaWarningModal({ visible: false, type: null, pendingConfig: null })
+      
+      message.success(`Criteria configuration updated successfully! ${result.message}`)
+      
+      // Refresh evaluations to show cleared data
+      fetchDepotEvaluations()
+      
+    } catch (error) {
+      console.error('Error updating criteria:', error)
+      message.error('Failed to update criteria configuration. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const BWMConfiguration = () => {
+    // Removed excessive logging to reduce console noise
     
     // Temporary state for form inputs
     const [tempConfig, setTempConfig] = useState({
-      numCriteria: ahpConfig.numCriteria
+      numCriteria: bwmConfig.numCriteria
     })
-    const [tempCriteriaNames, setTempCriteriaNames] = useState([...ahpConfig.criteriaNames])
-    const [tempCriteriaWeights, setTempCriteriaWeights] = useState([...ahpConfig.criteriaWeights])
-    const [pairwiseMatrix, setPairwiseMatrix] = useState([])
-    const [calculatedWeights, setCalculatedWeights] = useState([])
+    const [tempCriteriaNames, setTempCriteriaNames] = useState([...bwmConfig.criteriaNames])
+    const [tempBestCriterion, setTempBestCriterion] = useState(bwmConfig.bestCriterion)
+    const [tempWorstCriterion, setTempWorstCriterion] = useState(bwmConfig.worstCriterion)
+    const [tempBestToOthers, setTempBestToOthers] = useState({...bwmConfig.bestToOthers})
+    const [tempOthersToWorst, setTempOthersToWorst] = useState({...bwmConfig.othersToWorst})
+    const [bwmResults, setBwmResults] = useState(null)
+    const [bwmLoading, setBwmLoading] = useState(false)
     
-    // Update temp state when ahpConfig changes
+    // Update temp state when bwmConfig changes
     useEffect(() => {
       setTempConfig({
-        numCriteria: ahpConfig.numCriteria
+        numCriteria: bwmConfig.numCriteria
       })
-      setTempCriteriaNames([...ahpConfig.criteriaNames])
-      setTempCriteriaWeights([...ahpConfig.criteriaWeights])
-      initializePairwiseMatrix(ahpConfig.numCriteria)
-    }, [ahpConfig])
-    
-    const initializePairwiseMatrix = (numCriteria) => {
-      const matrix = Array(numCriteria).fill(null).map(() => Array(numCriteria).fill(1))
-      setPairwiseMatrix(matrix)
-    }
-    
-    const updatePairwiseValue = (i, j, value) => {
-      const newMatrix = [...pairwiseMatrix]
-      newMatrix[i][j] = value
-      newMatrix[j][i] = 1 / value // Reciprocal value
-      setPairwiseMatrix(newMatrix)
-    }
-    
-    const calculateAHPWeights = () => {
-      if (pairwiseMatrix.length === 0) return
-      
-      const n = pairwiseMatrix.length
-      const normalizedMatrix = Array(n).fill(null).map(() => Array(n).fill(0))
-      
-      // Normalize each column
-      for (let j = 0; j < n; j++) {
-        const columnSum = pairwiseMatrix.reduce((sum, row) => sum + row[j], 0)
-        for (let i = 0; i < n; i++) {
-          normalizedMatrix[i][j] = pairwiseMatrix[i][j] / columnSum
-        }
-      }
-      
-      // Calculate row averages (weights)
-      const weights = normalizedMatrix.map(row => 
-        row.reduce((sum, val) => sum + val, 0) / n
-      )
-      
-      setCalculatedWeights(weights)
-      setTempCriteriaWeights(weights)
-    }
+      setTempCriteriaNames([...bwmConfig.criteriaNames])
+      setTempBestCriterion(bwmConfig.bestCriterion)
+      setTempWorstCriterion(bwmConfig.worstCriterion)
+      setTempBestToOthers({...bwmConfig.bestToOthers})
+      setTempOthersToWorst({...bwmConfig.othersToWorst})
+    }, [bwmConfig])
     
     const clearDepotEvaluations = async () => {
       try {
@@ -987,368 +1121,316 @@ const AdminSupplierManagement = () => {
         message.error('Failed to clear depot evaluations')
       }
     }
-
-    const showBasicConfigWarning = () => {
-      Modal.confirm({
-        title: 'Warning: Configuration Change',
-        content: (
-          <div>
-            <p>⚠️ <strong>All supplier scoring will be cleared!</strong></p>
-            <p>Changing the basic configuration (number of criteria) will invalidate all existing depot manager evaluations. This action cannot be undone.</p>
-            <p>Are you sure you want to proceed?</p>
-          </div>
-        ),
-        okText: 'Yes, Clear All Evaluations',
-        cancelText: 'Cancel',
-        okType: 'danger',
-        onOk: async () => {
-          await clearDepotEvaluations()
-          updateBasicConfigInternal()
-        }
-      })
-    }
-
-    const updateBasicConfigInternal = () => {
-      console.log('updateBasicConfig called:', tempConfig)
-      let newConfig = { ...ahpConfig, ...tempConfig }
-      
-      // If changing numCriteria, update arrays accordingly
-      if (tempConfig.numCriteria !== ahpConfig.numCriteria) {
-        const currentLength = ahpConfig.criteriaNames?.length || 0
-        const newLength = tempConfig.numCriteria
-        
-        if (newLength > currentLength) {
-          // Add new criteria
-          const newNames = [...(ahpConfig.criteriaNames || [])]
-          const newWeights = [...(ahpConfig.criteriaWeights || [])]
-          for (let i = currentLength; i < newLength; i++) {
-            newNames.push(`Criteria ${i + 1}`)
-            newWeights.push(1.0)
-          }
-          newConfig.criteriaNames = newNames
-          newConfig.criteriaWeights = newWeights
-          setTempCriteriaNames(newNames)
-          setTempCriteriaWeights(newWeights)
-        } else if (newLength < currentLength) {
-          // Remove excess criteria
-          newConfig.criteriaNames = (ahpConfig.criteriaNames || []).slice(0, newLength)
-          newConfig.criteriaWeights = (ahpConfig.criteriaWeights || []).slice(0, newLength)
-          setTempCriteriaNames(newConfig.criteriaNames)
-          setTempCriteriaWeights(newConfig.criteriaWeights)
-        }
-      }
-      
-      console.log('New config:', newConfig)
-      setAhpConfig(newConfig)
-      localStorage.setItem('ahpConfig', JSON.stringify(newConfig))
-      
-      // Trigger storage event for cross-component sync
-      window.dispatchEvent(new StorageEvent('storage', {
-        key: 'ahpConfig',
-        newValue: JSON.stringify(newConfig),
-        storageArea: localStorage
-      }))
-      
-      message.success('Basic configuration updated successfully!')
-    }
-
+    
     const updateBasicConfig = () => {
-      // Check if any criteria change will happen
-      if (tempConfig.numCriteria !== ahpConfig.numCriteria) {
-        showBasicConfigWarning()
-      } else {
-        updateBasicConfigInternal()
+      console.log('updateBasicConfig called, tempConfig:', tempConfig)
+      console.log('Current criteriaWarningModal state:', criteriaWarningModal)
+      
+      // Show warning modal with pending configuration
+      const newNames = Array(tempConfig.numCriteria).fill('').map((_, i) => `Criteria ${i + 1}`)
+      const pendingConfig = {
+        numCriteria: tempConfig.numCriteria,
+        criteriaNames: newNames
       }
-    }
-
-    const showCriteriaNamesWarning = () => {
-      Modal.confirm({
-        title: 'Warning: Criteria Names Change',
-        content: (
-          <div>
-            <p>⚠️ <strong>All supplier scoring will be cleared!</strong></p>
-            <p>Changing criteria names will invalidate all existing depot manager evaluations. This action cannot be undone.</p>
-            <p>Are you sure you want to proceed?</p>
-          </div>
-        ),
-        okText: 'Yes, Clear All Evaluations',
-        cancelText: 'Cancel',
-        okType: 'danger',
-        onOk: async () => {
-          await clearDepotEvaluations()
-          updateCriteriaNamesInternal()
-        }
+      
+      console.log('Setting criteriaWarningModal to:', {
+        visible: true,
+        type: 'basic',
+        pendingConfig
+      })
+      
+      setCriteriaWarningModal({
+        visible: true,
+        type: 'basic',
+        pendingConfig
       })
     }
-
+    
     const updateCriteriaNamesInternal = () => {
       console.log('updateCriteriaNames called:', tempCriteriaNames)
-      const newConfig = { ...ahpConfig, criteriaNames: tempCriteriaNames }
-      setAhpConfig(newConfig)
-      localStorage.setItem('ahpConfig', JSON.stringify(newConfig))
+      console.log('Current criteriaWarningModal state:', criteriaWarningModal)
       
-      // Trigger storage event for cross-component sync
-      window.dispatchEvent(new StorageEvent('storage', {
-        key: 'ahpConfig',
-        newValue: JSON.stringify(newConfig),
-        storageArea: localStorage
-      }))
+      // Show warning modal with pending configuration
+      const pendingConfig = {
+        numCriteria: bwmConfig.numCriteria,
+        criteriaNames: tempCriteriaNames
+      }
       
-      message.success('Criteria names updated successfully!')
+      console.log('Setting criteriaWarningModal to:', {
+        visible: true,
+        type: 'names',
+        pendingConfig
+      })
+      
+      setCriteriaWarningModal({
+        visible: true,
+        type: 'names',
+        pendingConfig
+      })
     }
-
-    const updateCriteriaNames = () => {
-      // Check if criteria names actually changed
-      const currentNames = ahpConfig.criteriaNames || []
-      const hasChanges = tempCriteriaNames.some((name, index) => name !== currentNames[index])
+    
+    const calculateBWMWeights = async () => {
+      if (!tempBestCriterion || !tempWorstCriterion) {
+        message.error('Please select both best and worst criteria')
+        return
+      }
       
-      if (hasChanges) {
-        showCriteriaNamesWarning()
-      } else {
-        updateCriteriaNamesInternal()
+      if (tempBestCriterion === tempWorstCriterion) {
+        message.error('Best and worst criteria must be different')
+        return
+      }
+      
+      // Check if all comparisons are filled
+      const missingBestToOthers = tempCriteriaNames.some(criterion => 
+        criterion !== tempBestCriterion && !tempBestToOthers[criterion]
+      )
+      const missingOthersToWorst = tempCriteriaNames.some(criterion => 
+        criterion !== tempWorstCriterion && !tempOthersToWorst[criterion]
+      )
+      
+      if (missingBestToOthers || missingOthersToWorst) {
+        message.error('Please fill in all comparison values')
+        return
+      }
+      
+      setBwmLoading(true)
+      
+      try {
+        const response = await fetch('http://localhost:8000/api/bwm/calculate/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            criteria: tempCriteriaNames,
+            best_criterion: tempBestCriterion,
+            worst_criterion: tempWorstCriterion,
+            best_to_others: tempBestToOthers,
+            others_to_worst: tempOthersToWorst
+          })
+        })
+        
+        if (!response.ok) {
+          throw new Error('Failed to calculate BWM weights')
+        }
+        
+        const data = await response.json()
+        setBwmResults(data.data)
+        
+        // Update the config with calculated weights
+        const newConfig = {
+          ...bwmConfig,
+          criteriaWeights: tempCriteriaNames.map(name => data.data.weights[name]),
+          bestCriterion: tempBestCriterion,
+          worstCriterion: tempWorstCriterion,
+          bestToOthers: tempBestToOthers,
+          othersToWorst: tempOthersToWorst,
+          consistencyRatio: data.data.consistency_ratio
+        }
+        
+        setBwmConfig(newConfig)
+        localStorage.setItem('bwmConfig', JSON.stringify(newConfig))
+        
+        // Trigger storage event for cross-component sync
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: 'bwmConfig',
+          newValue: JSON.stringify(newConfig),
+          storageArea: localStorage
+        }))
+        
+        message.success('BWM weights calculated successfully!')
+        
+      } catch (error) {
+        console.error('Error calculating BWM weights:', error)
+        message.error('Failed to calculate BWM weights')
+      } finally {
+        setBwmLoading(false)
       }
     }
-
-    const updateCriteriaWeights = () => {
-      console.log('updateCriteriaWeights called:', tempCriteriaWeights)
-      const newConfig = { ...ahpConfig, criteriaWeights: tempCriteriaWeights }
-      setAhpConfig(newConfig)
-      localStorage.setItem('ahpConfig', JSON.stringify(newConfig))
-      
-      // Trigger storage event for cross-component sync
-      window.dispatchEvent(new StorageEvent('storage', {
-        key: 'ahpConfig',
-        newValue: JSON.stringify(newConfig),
-        storageArea: localStorage
-      }))
-      
-      message.success('Criteria weights updated successfully!')
-    }
-
-
+    
     return (
-      <Space direction="vertical" style={{ width: '100%' }} size="large">
-        <Row gutter={16}>
-          <Col span={12}>
-            <Card title="Basic Configuration" extra={<SettingOutlined />}>
-              <Space direction="vertical" style={{ width: '100%' }} size="large">
-                <div>
-                  <Text strong style={{ display: 'block', marginBottom: 8 }}>
-                    Number of Criteria:
-                  </Text>
+    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Card title="Step 1: Basic Configuration" extra={<SettingOutlined />}>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <div>
+            <Text strong>Number of Criteria:</Text>
+            <InputNumber
+              min={2}
+              max={10}
+              value={tempConfig.numCriteria}
+              onChange={(value) => setTempConfig({ ...tempConfig, numCriteria: value })}
+              style={{ marginLeft: '10px' }}
+            />
+          </div>
+          <Button type="primary" onClick={updateBasicConfig}>
+            Update Basic Configuration
+          </Button>
+        </Space>
+      </Card>
+
+      <Card title="Step 2: Criteria Names" extra={<EditOutlined />}>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <div>
+            <Text strong>Criteria Names:</Text>
+            <div style={{ marginTop: '10px' }}>
+              {tempCriteriaNames.map((name, index) => (
+                <div key={index} style={{ marginBottom: '8px' }}>
+                  <Text>{`Criteria ${index + 1}:`}</Text>
+                  <Input
+                    value={name}
+                    onChange={(e) => {
+                      const newNames = [...tempCriteriaNames]
+                      newNames[index] = e.target.value
+                      setTempCriteriaNames(newNames)
+                    }}
+                    placeholder={`Enter name for criteria ${index + 1}`}
+                    style={{ marginLeft: '10px', width: '300px' }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+          <Button type="primary" onClick={updateCriteriaNamesInternal}>
+            Update Criteria Names
+          </Button>
+        </Space>
+      </Card>
+
+      <Card title="Step 3: Best-Worst Method Comparisons" extra={<BarChartOutlined />}>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            message="Best-Worst Method Instructions"
+            description="BWM requires fewer comparisons than AHP. Select the most important (best) and least important (worst) criteria, then compare them with others using a 1-9 scale."
+            type="info"
+            showIcon
+          />
+          
+          <Row gutter={16}>
+            <Col span={12}>
+              <div>
+                <Text strong>Best Criterion (Most Important):</Text>
+                <Select
+                  value={tempBestCriterion}
+                  onChange={setTempBestCriterion}
+                  style={{ width: '100%', marginTop: '8px' }}
+                  placeholder="Select the most important criterion"
+                >
+                  {tempCriteriaNames.map(name => (
+                    <Option key={name} value={name}>{name}</Option>
+                  ))}
+                </Select>
+              </div>
+            </Col>
+            <Col span={12}>
+              <div>
+                <Text strong>Worst Criterion (Least Important):</Text>
+                <Select
+                  value={tempWorstCriterion}
+                  onChange={setTempWorstCriterion}
+                  style={{ width: '100%', marginTop: '8px' }}
+                  placeholder="Select the least important criterion"
+                >
+                  {tempCriteriaNames.map(name => (
+                    <Option key={name} value={name}>{name}</Option>
+                  ))}
+                </Select>
+              </div>
+            </Col>
+          </Row>
+          
+          {tempBestCriterion && (
+            <div>
+              <Text strong>Best-to-Others Comparisons:</Text>
+              <Text type="secondary" style={{ display: 'block', marginBottom: '10px' }}>
+                How much more important is "{tempBestCriterion}" compared to each other criterion?
+              </Text>
+              {tempCriteriaNames.filter(name => name !== tempBestCriterion).map(name => (
+                <div key={name} style={{ marginBottom: '8px' }}>
+                  <Text>{`${tempBestCriterion} vs ${name}:`}</Text>
                   <InputNumber
                     min={1}
-                    max={10}
-                    value={tempConfig.numCriteria}
-                    onChange={(value) => setTempConfig(prev => ({ ...prev, numCriteria: value }))}
-                    style={{ width: '100%' }}
-                    placeholder="Enter number of criteria (1-10)"
+                    max={9}
+                    value={tempBestToOthers[name]}
+                    onChange={(value) => setTempBestToOthers({
+                      ...tempBestToOthers,
+                      [name]: value
+                    })}
+                    style={{ marginLeft: '10px', width: '100px' }}
+                    placeholder="1-9"
                   />
-                  <Text type="secondary" style={{ fontSize: '12px', display: 'block', marginTop: 4 }}>
-                    Sets the number of evaluation criteria for supplier scoring
+                  <Text type="secondary" style={{ marginLeft: '10px' }}>
+                    (1=equal, 9=extremely more important)
                   </Text>
                 </div>
-                
-                
-                <Button 
-                  type="primary" 
-                  onClick={updateBasicConfig}
-                  style={{ width: '100%' }}
-                  icon={<CheckOutlined />}
-                >
-                  Update Basic Configuration
-                </Button>
-              </Space>
-            </Card>
-          </Col>
-        
-        <Col span={12}>
-          <Card title="Current AHP Status" extra={<BarChartOutlined />}>
-            <Descriptions column={1} bordered>
-              <Descriptions.Item label="Criteria Count">
-                <Badge count={ahpConfig.numCriteria} style={{ backgroundColor: '#52c41a' }} />
-                <span style={{ marginLeft: 8 }}>Active Criteria</span>
-              </Descriptions.Item>
-              <Descriptions.Item label="Suppliers">
-                <div>
-                  <Badge count={ahpConfig.supplierNames?.length || 0} style={{ backgroundColor: '#1890ff' }} />
-                  <span style={{ marginLeft: 8 }}>Database Suppliers</span>
-                  <div style={{ marginTop: 8 }}>
-                    {ahpConfig.supplierNames?.map((name, index) => (
-                      <Tag key={index} style={{ margin: '2px' }}>{name}</Tag>
-                    )) || <Text type="secondary">No suppliers found</Text>}
-                  </div>
-                </div>
-              </Descriptions.Item>
-              <Descriptions.Item label="Configuration Status">
-                <Tag color="green" icon={<CheckCircleOutlined />}>
-                  Ready for AHP Analysis
-                </Tag>
-              </Descriptions.Item>
-            </Descriptions>
-            
-            <div style={{ marginTop: 16 }}>
-              <Text strong>Next Steps:</Text>
-              <ol style={{ marginTop: 8, paddingLeft: 16 }}>
-                <li>Configure criteria names and weights below</li>
-                <li>Go to AHP Supplier Scoring tab</li>
-                <li>Enter supplier information</li>
-                <li>Calculate AHP scores</li>
-              </ol>
+              ))}
             </div>
-          </Card>
-        </Col>
-      </Row>
-
-      <Card title="Step 1: Define Supplier Selection Criteria" style={{ marginTop: 24 }}>
-        <Row gutter={[16, 16]}>
-          {tempCriteriaNames.map((name, index) => (
-            <Col span={8} key={index}>
-              <Text strong>Criteria {index + 1} name:</Text>
-              <Input
-                value={name}
-                onChange={(e) => {
-                  const newNames = [...tempCriteriaNames]
-                  newNames[index] = e.target.value
-                  setTempCriteriaNames(newNames)
-                }}
-                placeholder={`Criteria ${index + 1}`}
-                style={{ marginTop: 8 }}
-              />
-            </Col>
-          ))}
-        </Row>
-        <Button 
-          type="primary" 
-          onClick={updateCriteriaNames}
-          style={{ width: '100%', marginTop: 16 }}
-          icon={<CheckOutlined />}
-        >
-          Update Criteria Names
-        </Button>
+          )}
+          
+          {tempWorstCriterion && (
+            <div>
+              <Text strong>Others-to-Worst Comparisons:</Text>
+              <Text type="secondary" style={{ display: 'block', marginBottom: '10px' }}>
+                How much more important is each criterion compared to "{tempWorstCriterion}"?
+              </Text>
+              {tempCriteriaNames.filter(name => name !== tempWorstCriterion).map(name => (
+                <div key={name} style={{ marginBottom: '8px' }}>
+                  <Text>{`${name} vs ${tempWorstCriterion}:`}</Text>
+                  <InputNumber
+                    min={1}
+                    max={9}
+                    value={tempOthersToWorst[name]}
+                    onChange={(value) => setTempOthersToWorst({
+                      ...tempOthersToWorst,
+                      [name]: value
+                    })}
+                    style={{ marginLeft: '10px', width: '100px' }}
+                    placeholder="1-9"
+                  />
+                  <Text type="secondary" style={{ marginLeft: '10px' }}>
+                    (1=equal, 9=extremely more important)
+                  </Text>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          <Button type="primary" onClick={calculateBWMWeights} loading={bwmLoading}>
+            Calculate BWM Weights
+          </Button>
+        </Space>
       </Card>
 
-      <Card title="Step 2: Assign Criteria Weights (Relative Importance)" style={{ marginTop: 24 }}>
-        <Alert
-          style={{ marginBottom: 16 }}
-          message="AHP Pairwise Comparison Matrix"
-          description="Compare each pair of criteria using the scale below. For each cell, select how much more important the row criterion is compared to the column criterion. Use reciprocal values (1/2, 1/3, etc.) when the row criterion is less important than the column criterion."
-          type="info"
-          showIcon
-        />
-        
-        <div style={{ marginBottom: 16, padding: 16, backgroundColor: '#f9f9f9', borderRadius: 6 }}>
-          <Text strong style={{ display: 'block', marginBottom: 8 }}>Interpretation of Entries in Pairwise Comparison Matrix:</Text>
-          <ul style={{ margin: 0, paddingLeft: 20 }}>
-            <li><strong>1:</strong> Criteria are of equal importance</li>
-            <li><strong>3:</strong> Row criterion is weakly more important than column criterion</li>
-            <li><strong>5:</strong> Experience and judgment indicate that row criterion is strongly more important than column criterion</li>
-            <li><strong>7:</strong> Row criterion is very strongly or demonstrably more important than column criterion</li>
-            <li><strong>9:</strong> Row criterion is absolutely more important than column criterion</li>
-            <li><strong>2, 4, 6, 8:</strong> Intermediate values—for example, a value of 8 means that row criterion is midway between strongly and absolutely more important than column criterion</li>
-            <li><strong>1/2, 1/3, 1/4, etc.:</strong> Use reciprocal values when the row criterion is less important than the column criterion</li>
-          </ul>
-        </div>
-        
-        <div style={{ overflowX: 'auto', marginBottom: 16 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ border: '1px solid #d9d9d9', padding: '8px', background: '#fafafa' }}></th>
+      {bwmResults && (
+        <Card title="Step 4: BWM Results" extra={<CheckCircleOutlined />}>
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <div>
+              <Text strong>Calculated Weights:</Text>
+              <div style={{ marginTop: '10px' }}>
                 {tempCriteriaNames.map((name, index) => (
-                  <th key={index} style={{ border: '1px solid #d9d9d9', padding: '8px', background: '#fafafa', textAlign: 'center' }}>
-                    {name}
-                  </th>
+                  <div key={index} style={{ marginBottom: '8px' }}>
+                    <Text>{`${name}: ${bwmResults.weights[name]?.toFixed(4) || 'N/A'}`}</Text>
+                  </div>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {tempCriteriaNames.map((rowName, i) => (
-                <tr key={i}>
-                  <td style={{ border: '1px solid #d9d9d9', padding: '8px', background: '#fafafa', fontWeight: 'bold' }}>
-                    {rowName}
-                  </td>
-                  {tempCriteriaNames.map((colName, j) => (
-                    <td key={j} style={{ border: '1px solid #d9d9d9', padding: '8px', textAlign: 'center' }}>
-                      {i === j ? (
-                        <span style={{ fontWeight: 'bold' }}>1</span>
-                      ) : i < j ? (
-                        <Select
-                          value={pairwiseMatrix[i]?.[j] || 1}
-                          onChange={(value) => updatePairwiseValue(i, j, value)}
-                          style={{ width: '80px' }}
-                        >
-                          <Option value={1/9}>1/9</Option>
-                          <Option value={1/8}>1/8</Option>
-                          <Option value={1/7}>1/7</Option>
-                          <Option value={1/6}>1/6</Option>
-                          <Option value={1/5}>1/5</Option>
-                          <Option value={1/4}>1/4</Option>
-                          <Option value={1/3}>1/3</Option>
-                          <Option value={1/2}>1/2</Option>
-                          <Option value={1}>1</Option>
-                          <Option value={2}>2</Option>
-                          <Option value={3}>3</Option>
-                          <Option value={4}>4</Option>
-                          <Option value={5}>5</Option>
-                          <Option value={6}>6</Option>
-                          <Option value={7}>7</Option>
-                          <Option value={8}>8</Option>
-                          <Option value={9}>9</Option>
-                        </Select>
-                      ) : (
-                        <span style={{ color: '#666' }}>
-                          {pairwiseMatrix[i]?.[j] ? (1 / pairwiseMatrix[j][i]).toFixed(2) : '1.00'}
-                        </span>
-                      )}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        
-        <Button 
-          type="primary" 
-          onClick={calculateAHPWeights}
-          style={{ marginBottom: 16 }}
-          icon={<CalculatorOutlined />}
-        >
-          Calculate Weights from Matrix
-        </Button>
-        
-        {calculatedWeights.length > 0 && (
-          <div style={{ marginBottom: 16 }}>
-            <Title level={5}>Calculated Weights:</Title>
-            <Row gutter={[16, 8]}>
-              {tempCriteriaNames.map((name, index) => (
-                <Col span={8} key={index}>
-                  <Text strong>{name}:</Text>
-                  <Text style={{ marginLeft: 8 }}>{(calculatedWeights[index] * 100).toFixed(1)}%</Text>
-                </Col>
-              ))}
-            </Row>
-          </div>
-        )}
-        
-        <Button 
-          type="primary" 
-          onClick={updateCriteriaWeights}
-          style={{ width: '100%', marginTop: 16 }}
-          icon={<CheckOutlined />}
-          disabled={calculatedWeights.length === 0}
-        >
-          Update Criteria Weights
-        </Button>
-        <Alert
-          style={{ marginTop: 16 }}
-          message="Criteria Configuration Complete"
-          description="These criteria names and weights will be used in the AHP Supplier Scoring interface for evaluation."
-          type="success"
-          showIcon
-        />
-      </Card>
+              </div>
+            </div>
+            
+            <div>
+              <Text strong>Consistency Ratio: </Text>
+              <Text type={bwmResults.consistency_ratio <= 0.1 ? 'success' : 'warning'}>
+                {bwmResults.consistency_ratio?.toFixed(4)} 
+                ({bwmResults.consistency_interpretation})
+              </Text>
+            </div>
+            
+            <Alert
+              message="Configuration Complete"
+              description="These criteria names and weights will be used in the PROMETHEE II Supplier Scoring interface for evaluation."
+              type="success"
+              showIcon
+            />
+          </Space>
+        </Card>
+      )}
     </Space>
     )
   }
@@ -1399,14 +1481,14 @@ const AdminSupplierManagement = () => {
             children: <ValidationStatus />
           },
           {
-            key: 'ahp-config',
+            key: 'bwm-config',
             label: (
               <span>
                 <SettingOutlined />
-                AHP Configuration
+                BWM Configuration
               </span>
             ),
-            children: <AHPConfiguration />
+            children: <BWMConfiguration />
           },
           {
             key: 'management',
@@ -1503,6 +1585,73 @@ const AdminSupplierManagement = () => {
             )}
           </div>
         )}
+      </Modal>
+
+      {/* Criteria Update Warning Modal */}
+      <Modal
+        title={
+          <div style={{ color: '#ff4d4f' }}>
+            <CloseCircleOutlined style={{ marginRight: 8 }} />
+            ⚠️ Warning: This will clear all depot evaluations
+          </div>
+        }
+        open={criteriaWarningModal.visible}
+        onCancel={() => setCriteriaWarningModal({ visible: false, type: null, pendingConfig: null })}
+        footer={[
+          <Button 
+            key="cancel" 
+            onClick={() => setCriteriaWarningModal({ visible: false, type: null, pendingConfig: null })}
+          >
+            Cancel
+          </Button>,
+          <Button 
+            key="confirm" 
+            type="primary" 
+            danger
+            loading={loading}
+            onClick={confirmCriteriaUpdate}
+          >
+            Yes, Clear and Update
+          </Button>
+        ]}
+        width={600}
+      >
+        <div style={{ padding: '16px 0' }}>
+          <Alert
+            message="Important: This action cannot be undone"
+            description={
+              <div>
+                <p><strong>What will happen:</strong></p>
+                <ul style={{ paddingLeft: '20px', margin: '8px 0' }}>
+                  <li>All existing depot manager evaluations will be permanently deleted</li>
+                  <li>Criteria configuration will be updated</li>
+                  <li>Depot managers will need to re-evaluate all suppliers with the new criteria</li>
+                  <li>PROMETHEE II rankings will be reset</li>
+                </ul>
+                
+                {criteriaWarningModal.pendingConfig && (
+                  <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+                    <p><strong>New Configuration:</strong></p>
+                    <p>Number of Criteria: <strong>{criteriaWarningModal.pendingConfig.numCriteria}</strong></p>
+                    <p>Criteria Names:</p>
+                    <ul style={{ paddingLeft: '20px', margin: '4px 0' }}>
+                      {criteriaWarningModal.pendingConfig.criteriaNames?.map((name, index) => (
+                        <li key={index}><strong>{name}</strong></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            }
+            type="warning"
+            showIcon
+            style={{ marginBottom: '16px' }}
+          />
+          
+          <div style={{ textAlign: 'center', fontSize: '16px', fontWeight: 'bold', color: '#ff4d4f' }}>
+            Are you sure you want to proceed?
+          </div>
+        </div>
       </Modal>
     </div>
   )

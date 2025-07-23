@@ -20,7 +20,6 @@ import {
 import { CalculatorOutlined, CheckOutlined, UserOutlined, BarChartOutlined } from '@ant-design/icons'
 import Plot from 'react-plotly.js'
 import { prometheeAPI } from '../services/api'
-import DepotManagerSurvey from './DepotManagerSurvey'
 
 const { Title, Text } = Typography
 
@@ -33,11 +32,11 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
   const [supplierScores, setSupplierScores] = useState({})
   const [loading, setLoading] = useState(false)
   const [evaluationSummary, setEvaluationSummary] = useState(null)
-  const [activeTab, setActiveTab] = useState('survey')
+  const [activeTab, setActiveTab] = useState('summary')
 
-  // Load AHP configuration from localStorage on component mount
+  // Load BWM configuration from localStorage on component mount
   useEffect(() => {
-    const savedConfig = localStorage.getItem('ahpConfig')
+    const savedConfig = localStorage.getItem('bwmConfig')
     if (savedConfig) {
       const config = JSON.parse(savedConfig)
       setNumCriteria(config.numCriteria || 3)
@@ -82,7 +81,7 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
 
   useEffect(() => {
     // Only reset criteria if they're not already loaded from config
-    const savedConfig = localStorage.getItem('ahpConfig')
+    const savedConfig = localStorage.getItem('bwmConfig')
     if (!savedConfig || !JSON.parse(savedConfig).criteriaNames) {
       setCriteriaNames(Array(numCriteria).fill('').map((_, i) => `Criteria ${i + 1}`))
       setCriteriaWeights(Array(numCriteria).fill(1.0))
@@ -95,7 +94,7 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
     
     const handleStorageChange = (e) => {
       console.log('Storage change detected in PROMETHEEIIScoringInterface:', e)
-      if (e.key === 'ahpConfig' && e.newValue) {
+      if (e.key === 'bwmConfig' && e.newValue) {
         // Clear any existing timeout to debounce multiple rapid changes
         if (updateTimeout) {
           clearTimeout(updateTimeout)
@@ -130,7 +129,7 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
     // Also check for updates on visibility change (when switching tabs)
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        const savedConfig = localStorage.getItem('ahpConfig')
+        const savedConfig = localStorage.getItem('bwmConfig')
         if (savedConfig) {
           const config = JSON.parse(savedConfig)
           // Only update if config actually changed
@@ -448,22 +447,6 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
         onChange={setActiveTab} 
         style={{ marginTop: 24 }}
         items={[
-          {
-            key: 'survey',
-            label: (
-              <span>
-                <UserOutlined />
-                Depot Manager Survey
-                {evaluationSummary && (
-                  <Badge 
-                    count={evaluationSummary.total_evaluations} 
-                    style={{ backgroundColor: '#1890ff', marginLeft: 8 }}
-                  />
-                )}
-              </span>
-            ),
-            children: <DepotManagerSurvey onSurveyComplete={fetchEvaluationSummary} />
-          },
           {
             key: 'summary',
             label: (

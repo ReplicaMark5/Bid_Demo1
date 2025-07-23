@@ -16,6 +16,7 @@ import traceback
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from MOO_e_constraint_Dynamic_Bid import SelectiveNAFlexibleEConstraintOptimizer
 from database import SupplierDatabase
+from best_worst_method import calculate_bwm_weights
 
 app = FastAPI(title="Unified Supply Chain Optimizer API", version="1.0.0")
 
@@ -45,9 +46,42 @@ class SupplierCreate(BaseModel):
     name: str
     email: Optional[str] = None
 
+class SupplierProfileUpdate(BaseModel):
+    company_profile: Optional[str] = None
+    annual_revenue: Optional[float] = None
+    number_of_employees: Optional[int] = None
+    bbee_level: Optional[int] = None
+    black_ownership_percent: Optional[float] = None
+    black_female_ownership_percent: Optional[float] = None
+    bbee_compliant: Optional[bool] = None
+    cipc_cor_documents: Optional[str] = None
+    tax_certificate: Optional[str] = None
+    fuel_products_offered: Optional[str] = None
+    product_service_type: Optional[str] = None
+    geographical_network: Optional[str] = None
+    delivery_types_offered: Optional[str] = None
+    method_of_sourcing: Optional[str] = None
+    invest_in_refuelling_equipment: Optional[str] = None
+    reciprocal_business: Optional[str] = None
+
+class BWMRequest(BaseModel):
+    criteria: List[str]
+    best_criterion: str
+    worst_criterion: str
+    best_to_others: Dict[str, float]
+    others_to_worst: Dict[str, float]
+
 class DepotCreate(BaseModel):
     name: str
     annual_volume: Optional[float] = None
+    country: Optional[str] = None
+    town: Optional[str] = None
+    lats: Optional[float] = None
+    longs: Optional[float] = None
+    fuel_zone: Optional[str] = None
+    tankage_size: Optional[float] = None
+    number_of_pumps: Optional[int] = None
+    equipment_value: Optional[float] = None
 
 class SupplierDataSubmission(BaseModel):
     supplier_id: int
@@ -102,6 +136,11 @@ class PROMETHEECalculationRequest(BaseModel):
     criteria_weights: List[float]
     preference_thresholds: Optional[Dict[str, float]] = None
     indifference_thresholds: Optional[Dict[str, float]] = None
+
+class CriteriaUpdateRequest(BaseModel):
+    old_criteria_names: List[str]
+    new_criteria_names: List[str]
+    default_score: Optional[float] = 5.0
 
 class OptimizerInitRequest(BaseModel):
     file_path: str
@@ -232,9 +271,15 @@ def calculate_promethee_ii(supplier_scores: Dict[int, Dict[str, float]],
                 preference_matrix[i][j] = aggregated_preference
     
     # Calculate flows
-    positive_flows = np.mean(preference_matrix, axis=1)  # How much each supplier dominates others
-    negative_flows = np.mean(preference_matrix, axis=0)  # How much each supplier is dominated
-    net_flows = positive_flows - negative_flows
+    if preference_matrix.size > 0:
+        positive_flows = np.mean(preference_matrix, axis=1)  # How much each supplier dominates others
+        negative_flows = np.mean(preference_matrix, axis=0)  # How much each supplier is dominated
+        net_flows = positive_flows - negative_flows
+    else:
+        # Handle empty matrix case
+        positive_flows = np.zeros(n_suppliers)
+        negative_flows = np.zeros(n_suppliers)
+        net_flows = np.zeros(n_suppliers)
     
     # Create ranking
     ranking_indices = np.argsort(-net_flows)  # Sort by net flow (descending)
@@ -284,7 +329,18 @@ async def get_suppliers(db: SupplierDatabase = Depends(get_db)):
 async def create_depot(depot: DepotCreate, db: SupplierDatabase = Depends(get_db)):
     """Create a new depot (admin only)"""
     try:
-        depot_id = db.add_depot(depot.name, depot.annual_volume)
+        depot_id = db.add_depot(
+            name=depot.name,
+            annual_volume=depot.annual_volume,
+            country=depot.country,
+            town=depot.town,
+            lats=depot.lats,
+            longs=depot.longs,
+            fuel_zone=depot.fuel_zone,
+            tankage_size=depot.tankage_size,
+            number_of_pumps=depot.number_of_pumps,
+            equipment_value=depot.equipment_value
+        )
         return {"id": depot_id, "message": "Depot created successfully"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error creating depot: {str(e)}")
@@ -356,6 +412,37 @@ async def get_supplier_submissions(supplier_id: int, db: SupplierDatabase = Depe
         return {"submissions": submissions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching submissions: {str(e)}")
+
+@app.get("/api/suppliers/{supplier_id}/profile/")
+async def get_supplier_profile(supplier_id: int, db: SupplierDatabase = Depends(get_db)):
+    """Get supplier profile information"""
+    try:
+        supplier = db.get_supplier_by_id(supplier_id)
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier not found")
+        return {"supplier": supplier}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching supplier profile: {str(e)}")
+
+@app.put("/api/suppliers/{supplier_id}/profile/")
+async def update_supplier_profile(supplier_id: int, profile: SupplierProfileUpdate, db: SupplierDatabase = Depends(get_db)):
+    """Update supplier profile information"""
+    try:
+        # Check if supplier exists
+        supplier = db.get_supplier_by_id(supplier_id)
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier not found")
+        
+        # Update profile
+        profile_data = profile.dict(exclude_unset=True)
+        success = db.update_supplier_profile(supplier_id, profile_data)
+        
+        if success:
+            return {"message": "Profile updated successfully"}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to update profile")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating supplier profile: {str(e)}")
 
 # ============================================================================
 # ADMIN ENDPOINTS (from supplier_api.py)
@@ -548,8 +635,25 @@ async def create_temp_excel(db: SupplierDatabase = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error creating Excel file: {str(e)}")
 
 # ============================================================================
-# Legacy AHP endpoints removed - now using PROMETHEE II
+# BEST-WORST METHOD (BWM) ENDPOINTS
+# ============================================================================
+@app.post("/api/bwm/calculate/")
+async def calculate_bwm_weights_endpoint(request: BWMRequest):
+    """Calculate criteria weights using Best-Worst Method"""
+    try:
+        result = calculate_bwm_weights(
+            criteria=request.criteria,
+            best=request.best_criterion,
+            worst=request.worst_criterion,
+            best_to_others=request.best_to_others,
+            others_to_worst=request.others_to_worst
+        )
+        return {"success": True, "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"BWM calculation failed: {str(e)}")
 
+# ============================================================================
+# Legacy AHP endpoints removed - now using BWM + PROMETHEE II
 # ============================================================================
 # OPTIMIZATION ENDPOINTS (from backend_api.py)
 # ============================================================================
@@ -873,13 +977,15 @@ async def get_ranking_analysis(solution_id: int):
 
 @app.post("/api/depot-evaluations/submit")
 async def submit_depot_evaluation(request: DepotEvaluationRequest):
-    """Submit a single depot evaluation"""
+    """Submit a single depot evaluation (legacy endpoint - converts to JSON format)"""
     try:
+        # Convert single criterion to JSON format for backward compatibility
+        criteria_scores = {request.criterion_name: request.score}
+        
         evaluation_id = db.submit_depot_evaluation(
             request.depot_id,
             request.supplier_id,
-            request.criterion_name,
-            request.score,
+            criteria_scores,
             request.manager_name,
             request.manager_email
         )
@@ -891,13 +997,23 @@ async def submit_depot_evaluation(request: DepotEvaluationRequest):
 async def submit_depot_evaluations_batch(request: DepotEvaluationBatchRequest):
     """Submit multiple depot evaluations at once"""
     try:
-        evaluation_ids = []
+        # Group evaluations by supplier_id to create JSON criteria scores
+        supplier_evaluations = {}
+        
         for evaluation in request.evaluations:
+            supplier_id = evaluation['supplier_id']
+            if supplier_id not in supplier_evaluations:
+                supplier_evaluations[supplier_id] = {}
+            
+            supplier_evaluations[supplier_id][evaluation['criterion_name']] = evaluation['score']
+        
+        # Submit one evaluation per supplier with all criteria scores
+        evaluation_ids = []
+        for supplier_id, criteria_scores in supplier_evaluations.items():
             evaluation_id = db.submit_depot_evaluation(
                 request.depot_id,
-                evaluation['supplier_id'],
-                evaluation['criterion_name'],
-                evaluation['score'],
+                supplier_id,
+                criteria_scores,
                 request.manager_name,
                 request.manager_email
             )
@@ -1037,6 +1153,41 @@ async def get_promethee_results():
         return {"results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting PROMETHEE results: {str(e)}")
+
+@app.post("/api/criteria/update")
+async def update_criteria_configuration(request: CriteriaUpdateRequest):
+    """Update criteria names and clear all existing evaluations"""
+    try:
+        # Clear all existing depot evaluations
+        clear_result = db.clear_depot_evaluations()
+        
+        return {
+            "message": f"Criteria configuration updated successfully. {clear_result['message']}",
+            "cleared_evaluations": clear_result['cleared_count']
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating criteria configuration: {str(e)}")
+
+@app.get("/api/criteria/current")
+async def get_current_criteria():
+    """Get current criteria from existing evaluations"""
+    try:
+        evaluations = db.get_depot_evaluations()
+        if not evaluations:
+            return {"criteria_names": [], "total_evaluations": 0}
+        
+        # Get criteria from first evaluation (they should all be consistent)
+        sample_criteria = evaluations[0]['criteria_scores']
+        criteria_names = list(sample_criteria.keys()) if sample_criteria else []
+        
+        return {
+            "criteria_names": criteria_names,
+            "total_evaluations": len(evaluations)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting current criteria: {str(e)}")
 
 # ============================================================================
 # HEALTH CHECK

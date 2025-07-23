@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import os
+import json
 
 class SupplierDatabase:
     def __init__(self, db_path: str = "supplier_data.db"):
@@ -20,6 +21,22 @@ class SupplierDatabase:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     email TEXT,
+                    company_profile TEXT,
+                    annual_revenue REAL,
+                    number_of_employees INTEGER,
+                    bbee_level INTEGER,
+                    black_ownership_percent REAL,
+                    black_female_ownership_percent REAL,
+                    bbee_compliant BOOLEAN,
+                    cipc_cor_documents TEXT,
+                    tax_certificate TEXT,
+                    fuel_products_offered TEXT,
+                    product_service_type TEXT,
+                    geographical_network TEXT,
+                    delivery_types_offered TEXT,
+                    method_of_sourcing TEXT,
+                    invest_in_refuelling_equipment TEXT,
+                    reciprocal_business TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -30,6 +47,14 @@ class SupplierDatabase:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     annual_volume REAL,
+                    country TEXT,
+                    town TEXT,
+                    lats REAL,
+                    longs REAL,
+                    fuel_zone TEXT,
+                    tankage_size REAL,
+                    number_of_pumps INTEGER,
+                    equipment_value REAL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -124,13 +149,64 @@ class SupplierDatabase:
             )
             return cursor.lastrowid
     
-    def add_depot(self, name: str, annual_volume: float = None) -> int:
+    def update_supplier_profile(self, supplier_id: int, profile_data: Dict) -> bool:
+        """Update supplier profile information"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE suppliers SET
+                    company_profile = ?,
+                    annual_revenue = ?,
+                    number_of_employees = ?,
+                    bbee_level = ?,
+                    black_ownership_percent = ?,
+                    black_female_ownership_percent = ?,
+                    bbee_compliant = ?,
+                    cipc_cor_documents = ?,
+                    tax_certificate = ?,
+                    fuel_products_offered = ?,
+                    product_service_type = ?,
+                    geographical_network = ?,
+                    delivery_types_offered = ?,
+                    method_of_sourcing = ?,
+                    invest_in_refuelling_equipment = ?,
+                    reciprocal_business = ?
+                WHERE id = ?
+            """, (
+                profile_data.get('company_profile'),
+                profile_data.get('annual_revenue'),
+                profile_data.get('number_of_employees'),
+                profile_data.get('bbee_level'),
+                profile_data.get('black_ownership_percent'),
+                profile_data.get('black_female_ownership_percent'),
+                profile_data.get('bbee_compliant'),
+                profile_data.get('cipc_cor_documents'),
+                profile_data.get('tax_certificate'),
+                profile_data.get('fuel_products_offered'),
+                profile_data.get('product_service_type'),
+                profile_data.get('geographical_network'),
+                profile_data.get('delivery_types_offered'),
+                profile_data.get('method_of_sourcing'),
+                profile_data.get('invest_in_refuelling_equipment'),
+                profile_data.get('reciprocal_business'),
+                supplier_id
+            ))
+            return cursor.rowcount > 0
+    
+    def add_depot(self, name: str, annual_volume: float = None, country: str = None, 
+                  town: str = None, lats: float = None, longs: float = None, 
+                  fuel_zone: str = None, tankage_size: float = None, 
+                  number_of_pumps: int = None, equipment_value: float = None) -> int:
         """Add a new depot and return the ID"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO depots (name, annual_volume) VALUES (?, ?)",
-                (name, annual_volume)
+                """INSERT INTO depots 
+                   (name, annual_volume, country, town, lats, longs, fuel_zone, 
+                    tankage_size, number_of_pumps, equipment_value) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (name, annual_volume, country, town, lats, longs, fuel_zone, 
+                 tankage_size, number_of_pumps, equipment_value)
             )
             return cursor.lastrowid
     
@@ -138,15 +214,55 @@ class SupplierDatabase:
         """Get all suppliers"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, name, email FROM suppliers ORDER BY name")
-            return [{"id": row[0], "name": row[1], "email": row[2]} for row in cursor.fetchall()]
+            cursor.execute("""
+                SELECT id, name, email, company_profile, annual_revenue, number_of_employees,
+                       bbee_level, black_ownership_percent, black_female_ownership_percent,
+                       bbee_compliant, cipc_cor_documents, tax_certificate, fuel_products_offered,
+                       product_service_type, geographical_network, delivery_types_offered,
+                       method_of_sourcing, invest_in_refuelling_equipment, reciprocal_business
+                FROM suppliers ORDER BY name
+            """)
+            columns = ["id", "name", "email", "company_profile", "annual_revenue", "number_of_employees",
+                      "bbee_level", "black_ownership_percent", "black_female_ownership_percent",
+                      "bbee_compliant", "cipc_cor_documents", "tax_certificate", "fuel_products_offered",
+                      "product_service_type", "geographical_network", "delivery_types_offered",
+                      "method_of_sourcing", "invest_in_refuelling_equipment", "reciprocal_business"]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def get_supplier_by_id(self, supplier_id: int) -> Optional[Dict]:
+        """Get a specific supplier by ID"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, name, email, company_profile, annual_revenue, number_of_employees,
+                       bbee_level, black_ownership_percent, black_female_ownership_percent,
+                       bbee_compliant, cipc_cor_documents, tax_certificate, fuel_products_offered,
+                       product_service_type, geographical_network, delivery_types_offered,
+                       method_of_sourcing, invest_in_refuelling_equipment, reciprocal_business
+                FROM suppliers WHERE id = ?
+            """, (supplier_id,))
+            row = cursor.fetchone()
+            if row:
+                columns = ["id", "name", "email", "company_profile", "annual_revenue", "number_of_employees",
+                          "bbee_level", "black_ownership_percent", "black_female_ownership_percent",
+                          "bbee_compliant", "cipc_cor_documents", "tax_certificate", "fuel_products_offered",
+                          "product_service_type", "geographical_network", "delivery_types_offered",
+                          "method_of_sourcing", "invest_in_refuelling_equipment", "reciprocal_business"]
+                return dict(zip(columns, row))
+            return None
     
     def get_depots(self) -> List[Dict]:
         """Get all depots"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, name, annual_volume FROM depots ORDER BY name")
-            return [{"id": row[0], "name": row[1], "annual_volume": row[2]} for row in cursor.fetchall()]
+            cursor.execute("""
+                SELECT id, name, annual_volume, country, town, lats, longs, 
+                       fuel_zone, tankage_size, number_of_pumps, equipment_value
+                FROM depots ORDER BY name
+            """)
+            columns = ["id", "name", "annual_volume", "country", "town", "lats", "longs", 
+                      "fuel_zone", "tankage_size", "number_of_pumps", "equipment_value"]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
     
     def submit_supplier_data(self, supplier_id: int, depot_id: int, data: Dict) -> int:
         """Submit supplier data for a specific depot"""
@@ -428,16 +544,17 @@ class SupplierDatabase:
             columns = [desc[0] for desc in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
     
-    def submit_depot_evaluation(self, depot_id: int, supplier_id: int, criterion_name: str, 
-                               score: float, manager_name: str = None, manager_email: str = None) -> int:
-        """Submit a depot evaluation for a supplier-criterion pair"""
+    def submit_depot_evaluation(self, depot_id: int, supplier_id: int, criteria_scores: Dict[str, float], 
+                               manager_name: str = None, manager_email: str = None) -> int:
+        """Submit a depot evaluation with all criteria scores as JSON"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            criteria_scores_json = json.dumps(criteria_scores)
             cursor.execute("""
                 INSERT OR REPLACE INTO depot_evaluations 
-                (depot_id, supplier_id, criterion_name, score, manager_name, manager_email)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (depot_id, supplier_id, criterion_name, score, manager_name, manager_email))
+                (depot_id, supplier_id, manager_name, manager_email, criteria_scores)
+                VALUES (?, ?, ?, ?, ?)
+            """, (depot_id, supplier_id, manager_name, manager_email, criteria_scores_json))
             return cursor.lastrowid
     
     def get_depot_evaluations(self, depot_id: int = None, supplier_id: int = None) -> List[Dict]:
@@ -447,7 +564,7 @@ class SupplierDatabase:
             query = """
                 SELECT de.id, de.depot_id, d.name as depot_name,
                        de.supplier_id, s.name as supplier_name,
-                       de.criterion_name, de.score, de.manager_name, de.manager_email,
+                       de.manager_name, de.manager_email, de.criteria_scores,
                        de.submitted_at
                 FROM depot_evaluations de
                 JOIN depots d ON de.depot_id = d.id
@@ -471,35 +588,69 @@ class SupplierDatabase:
             query += " ORDER BY de.submitted_at DESC"
             
             cursor.execute(query, params)
-            columns = [desc[0] for desc in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+            # Parse results and expand criteria scores
+            results = []
+            for row in cursor.fetchall():
+                result = {
+                    'id': row[0],
+                    'depot_id': row[1],
+                    'depot_name': row[2],
+                    'supplier_id': row[3],
+                    'supplier_name': row[4],
+                    'manager_name': row[5],
+                    'manager_email': row[6],
+                    'criteria_scores': json.loads(row[7]),
+                    'submitted_at': row[8]
+                }
+                results.append(result)
+            return results
     
     def get_aggregated_supplier_scores(self, criteria_names: List[str]) -> Dict[int, Dict[str, Dict]]:
         """Get aggregated scores for PROMETHEE II calculation"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Get all evaluations with averaged scores
+            # Get all evaluations with JSON criteria scores
             cursor.execute("""
-                SELECT supplier_id, criterion_name, AVG(score) as avg_score, COUNT(*) as num_evaluations
+                SELECT supplier_id, criteria_scores
                 FROM depot_evaluations
-                GROUP BY supplier_id, criterion_name
             """)
             
             # Initialize result structure
             result = {}
             
             for row in cursor.fetchall():
-                supplier_id, criterion_name, avg_score, count = row
+                supplier_id, criteria_scores_json = row
+                criteria_scores = json.loads(criteria_scores_json)
                 
                 if supplier_id not in result:
                     result[supplier_id] = {}
                 
-                result[supplier_id][criterion_name] = {
-                    'score': avg_score,
-                    'evaluations_count': count,
-                    'confidence': count  # Show number of evaluations instead of percentage
-                }
+                # Process each criterion from the JSON
+                for criterion_name, score in criteria_scores.items():
+                    if criterion_name in criteria_names:
+                        if criterion_name not in result[supplier_id]:
+                            result[supplier_id][criterion_name] = {
+                                'scores': [],
+                                'evaluations_count': 0
+                            }
+                        
+                        result[supplier_id][criterion_name]['scores'].append(score)
+                        result[supplier_id][criterion_name]['evaluations_count'] += 1
+            
+            # Calculate averages and confidence
+            for supplier_id in result:
+                for criterion_name in result[supplier_id]:
+                    scores = result[supplier_id][criterion_name]['scores']
+                    avg_score = sum(scores) / len(scores)
+                    count = len(scores)
+                    
+                    result[supplier_id][criterion_name] = {
+                        'score': avg_score,
+                        'evaluations_count': count,
+                        'confidence': count  # Show number of evaluations instead of percentage
+                    }
             
             return result
     
@@ -508,9 +659,9 @@ class SupplierDatabase:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Count unique depot managers per supplier
+            # Count unique evaluations per supplier (now one row per manager evaluation)
             cursor.execute("""
-                SELECT supplier_id, COUNT(DISTINCT depot_id) as manager_count
+                SELECT supplier_id, COUNT(*) as manager_count
                 FROM depot_evaluations
                 GROUP BY supplier_id
             """)
@@ -614,11 +765,11 @@ class SupplierDatabase:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Total evaluations
+            # Total evaluations (now represents complete manager evaluations)
             cursor.execute("SELECT COUNT(*) FROM depot_evaluations")
             total_evaluations = cursor.fetchone()[0]
             
-            # Evaluations by supplier
+            # Evaluations by supplier (count of complete evaluations)
             cursor.execute("""
                 SELECT s.name, COUNT(de.id) as evaluation_count
                 FROM suppliers s
@@ -628,7 +779,7 @@ class SupplierDatabase:
             """)
             supplier_evaluations = [{"supplier": row[0], "count": row[1]} for row in cursor.fetchall()]
             
-            # Evaluations by depot
+            # Evaluations by depot (count of complete evaluations)
             cursor.execute("""
                 SELECT d.name, COUNT(de.id) as evaluation_count
                 FROM depots d
@@ -638,8 +789,17 @@ class SupplierDatabase:
             """)
             depot_evaluations = [{"depot": row[0], "count": row[1]} for row in cursor.fetchall()]
             
+            # Count unique suppliers and depots that have been evaluated
+            cursor.execute("SELECT COUNT(DISTINCT supplier_id) FROM depot_evaluations")
+            suppliers_evaluated = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(DISTINCT depot_id) FROM depot_evaluations")
+            depots_participated = cursor.fetchone()[0]
+            
             return {
                 "total_evaluations": total_evaluations,
                 "supplier_evaluations": supplier_evaluations,
-                "depot_evaluations": depot_evaluations
+                "depot_evaluations": depot_evaluations,
+                "suppliers_evaluated": suppliers_evaluated,
+                "depots_participated": depots_participated
             }

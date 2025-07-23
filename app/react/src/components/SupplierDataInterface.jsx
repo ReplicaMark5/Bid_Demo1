@@ -15,7 +15,11 @@ import {
   message,
   Modal,
   Tag,
-  Descriptions
+  Descriptions,
+  Row,
+  Col,
+  Switch,
+  Checkbox
 } from 'antd'
 import { HotTable } from '@handsontable/react'
 import { registerAllModules } from 'handsontable/registry'
@@ -57,11 +61,13 @@ import {
   ClockCircleOutlined,
   CloseCircleOutlined,
   EyeOutlined,
-  FileTextOutlined
+  FileTextOutlined,
+  UserOutlined
 } from '@ant-design/icons'
 
 const { Title, Text } = Typography
 const { Option } = Select
+const { TextArea } = Input
 
 const SupplierDataInterface = () => {
   const [suppliers, setSuppliers] = useState([])
@@ -71,6 +77,9 @@ const SupplierDataInterface = () => {
   const [loading, setLoading] = useState(false)
   const [form] = Form.useForm()
   const [detailsModal, setDetailsModal] = useState({ visible: false, submission: null })
+  const [profileForm] = Form.useForm()
+  const [profileData, setProfileData] = useState(null)
+  const [profileLoading, setProfileLoading] = useState(false)
 
   useEffect(() => {
     fetchSuppliers()
@@ -80,6 +89,7 @@ const SupplierDataInterface = () => {
   useEffect(() => {
     if (selectedSupplier) {
       fetchSupplierSubmissions(selectedSupplier)
+      fetchSupplierProfile(selectedSupplier)
     }
   }, [selectedSupplier])
 
@@ -116,6 +126,65 @@ const SupplierDataInterface = () => {
       console.error('Error fetching submissions:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchSupplierProfile = async (supplierId) => {
+    try {
+      setProfileLoading(true)
+      const response = await fetch(`http://localhost:8000/api/suppliers/${supplierId}/profile/`)
+      const data = await response.json()
+      
+      // Convert delivery_types_offered string back to array for checkbox component
+      const processedData = {
+        ...data.supplier,
+        delivery_types_offered: data.supplier?.delivery_types_offered 
+          ? data.supplier.delivery_types_offered.split(', ').filter(item => item.trim()) 
+          : []
+      }
+      
+      setProfileData(processedData || {})
+      profileForm.setFieldsValue(processedData || {})
+    } catch (error) {
+      message.error('Failed to fetch profile')
+      console.error('Error fetching profile:', error)
+    } finally {
+      setProfileLoading(false)
+    }
+  }
+
+  const updateSupplierProfile = async (values) => {
+    try {
+      setProfileLoading(true)
+      
+      // Convert checkbox array to comma-separated string for delivery_types_offered
+      const processedValues = {
+        ...values,
+        delivery_types_offered: Array.isArray(values.delivery_types_offered) 
+          ? values.delivery_types_offered.join(', ') 
+          : values.delivery_types_offered
+      }
+      
+      const response = await fetch(`http://localhost:8000/api/suppliers/${selectedSupplier}/profile/`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(processedValues),
+      })
+      
+      if (response.ok) {
+        message.success('Profile updated successfully')
+        await fetchSupplierProfile(selectedSupplier)
+      } else {
+        const errorData = await response.json()
+        message.error(`Failed to update profile: ${errorData.detail}`)
+      }
+    } catch (error) {
+      message.error('Failed to update profile')
+      console.error('Error updating profile:', error)
+    } finally {
+      setProfileLoading(false)
     }
   }
 
@@ -473,6 +542,254 @@ const SupplierDataInterface = () => {
     </Card>
   )
 
+  const ProfileForm = () => (
+    <Card title="Company Profile" extra={<UserOutlined />}>
+      <Spin spinning={profileLoading}>
+        <Form
+          form={profileForm}
+          layout="vertical"
+          onFinish={updateSupplierProfile}
+        >
+          <Row gutter={16}>
+            <Col span={24}>
+              <Form.Item
+                name="company_profile"
+                label="Company Profile"
+                rules={[{ required: true, message: 'Please enter company profile' }]}
+              >
+                <TextArea rows={4} placeholder="Enter company profile description" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="annual_revenue"
+                label="Annual Revenue"
+                rules={[{ required: true, message: 'Please enter annual revenue' }]}
+              >
+                <InputNumber
+                  placeholder="Enter annual revenue"
+                  style={{ width: '100%' }}
+                  min={0}
+                  formatter={(value) => `R ${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                  parser={(value) => value.replace(/R\s?|(,*)/g, '')}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="number_of_employees"
+                label="Number of Employees"
+                rules={[{ required: true, message: 'Please enter number of employees' }]}
+              >
+                <InputNumber
+                  placeholder="Enter number of employees"
+                  style={{ width: '100%' }}
+                  min={1}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Title level={5} style={{ marginTop: 24 }}>B-BBEE Certificate</Title>
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item
+                name="bbee_level"
+                label="Current Level (1-8)"
+                rules={[{ required: true, message: 'Please enter B-BBEE level' }]}
+              >
+                <Select placeholder="Select B-BBEE level">
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map(level => (
+                    <Option key={level} value={level}>Level {level}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="black_ownership_percent"
+                label="Black Ownership %"
+                rules={[{ required: true, message: 'Please enter black ownership percentage' }]}
+              >
+                <InputNumber
+                  placeholder="Enter percentage"
+                  style={{ width: '100%' }}
+                  min={0}
+                  max={100}
+                  formatter={(value) => `${value}%`}
+                  parser={(value) => value.replace('%', '')}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="black_female_ownership_percent"
+                label="Black Female Ownership %"
+                rules={[{ required: true, message: 'Please enter black female ownership percentage' }]}
+              >
+                <InputNumber
+                  placeholder="Enter percentage"
+                  style={{ width: '100%' }}
+                  min={0}
+                  max={100}
+                  formatter={(value) => `${value}%`}
+                  parser={(value) => value.replace('%', '')}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={24}>
+              <Form.Item
+                name="bbee_compliant"
+                label="B-BBEE Compliant"
+                valuePropName="checked"
+              >
+                <Switch checkedChildren="Yes" unCheckedChildren="No" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="cipc_cor_documents"
+                label="CIPC or COR Documents"
+                rules={[{ required: true, message: 'Please select CIPC or COR documents status' }]}
+              >
+                <Select placeholder="Select CIPC or COR documents status">
+                  <Option value="Yes">Yes</Option>
+                  <Option value="No">No</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="tax_certificate"
+                label="Tax Certificate"
+                rules={[{ required: true, message: 'Please select tax certificate status' }]}
+              >
+                <Select placeholder="Select tax certificate status">
+                  <Option value="Yes">Yes</Option>
+                  <Option value="No">No</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="fuel_products_offered"
+                label="Fuel Products Offered"
+                rules={[{ required: true, message: 'Please enter fuel products offered' }]}
+              >
+                <TextArea rows={3} placeholder="Enter fuel products offered" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="product_service_type"
+                label="Product / Service Type"
+                rules={[{ required: true, message: 'Please select product/service type' }]}
+              >
+                <Select placeholder="Select product/service type">
+                  <Option value="Both">Both</Option>
+                  <Option value="Only Depot">Only Depot</Option>
+                  <Option value="Only On-road">Only On-road</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="geographical_network"
+                label="Geographical Network"
+                rules={[{ required: true, message: 'Please select geographical network' }]}
+              >
+                <Select placeholder="Select geographical network">
+                  <Option value="Both">Both</Option>
+                  <Option value="Only RSA">Only RSA</Option>
+                  <Option value="Only SADC excluding RSA">Only SADC excluding RSA</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="delivery_types_offered"
+                label="Delivery Types Offered"
+                rules={[{ required: true, message: 'Please select at least one delivery type' }]}
+              >
+                <Checkbox.Group
+                  options={[
+                    { label: 'COC', value: 'COC' },
+                    { label: 'Self-Delivered', value: 'Self-Delivered' },
+                    { label: 'Outsourced', value: 'Outsourced' }
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="method_of_sourcing"
+                label="Method of Sourcing"
+                rules={[{ required: true, message: 'Please select method of sourcing' }]}
+              >
+                <Select placeholder="Select method of sourcing">
+                  <Option value="Direct Import and Refined Locally">Direct Import and Refined Locally</Option>
+                  <Option value="Direct Import or Refined Locally">Direct Import or Refined Locally</Option>
+                  <Option value="Trade/Resell only">Trade/Resell only</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="invest_in_refuelling_equipment"
+                label="Invest in Refuelling Equipment"
+                rules={[{ required: true, message: 'Please select investment in refuelling equipment' }]}
+              >
+                <Select placeholder="Select investment in refuelling equipment">
+                  <Option value="Yes">Yes</Option>
+                  <Option value="No">No</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={24}>
+              <Form.Item
+                name="reciprocal_business"
+                label="Reciprocal Business"
+                rules={[{ required: true, message: 'Please select reciprocal business' }]}
+              >
+                <Select placeholder="Select reciprocal business">
+                  <Option value="Yes">Yes</Option>
+                  <Option value="No">No</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item>
+            <Button type="primary" htmlType="submit" loading={profileLoading}>
+              Update Profile
+            </Button>
+          </Form.Item>
+        </Form>
+      </Spin>
+    </Card>
+  )
+
   if (!selectedSupplier) {
     return (
       <Card>
@@ -538,6 +855,16 @@ const SupplierDataInterface = () => {
               </span>
             ),
             children: <SubmissionHistory />
+          },
+          {
+            key: 'profile',
+            label: (
+              <span>
+                <UserOutlined />
+                Profile
+              </span>
+            ),
+            children: <ProfileForm />
           }
         ]}
       />

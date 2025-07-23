@@ -38,6 +38,15 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
     loadCriteriaFromConfig()
   }, [])
 
+  // Debug logging for state changes
+  useEffect(() => {
+    console.log('DepotManagerSurvey - criteriaNames changed:', criteriaNames)
+  }, [criteriaNames])
+
+  useEffect(() => {
+    console.log('DepotManagerSurvey - selectedSuppliers changed:', selectedSuppliers)
+  }, [selectedSuppliers])
+
   const fetchSuppliers = async () => {
     try {
       const response = await fetch('http://localhost:8000/api/suppliers/')
@@ -61,10 +70,15 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
   }
 
   const loadCriteriaFromConfig = () => {
-    const savedConfig = localStorage.getItem('ahpConfig')
+    const savedConfig = localStorage.getItem('bwmConfig')
+    console.log('DepotManagerSurvey - savedConfig:', savedConfig)
     if (savedConfig) {
       const config = JSON.parse(savedConfig)
+      console.log('DepotManagerSurvey - parsed config:', config)
+      console.log('DepotManagerSurvey - config.criteriaNames:', config.criteriaNames)
       setCriteriaNames(config.criteriaNames || [])
+    } else {
+      console.log('DepotManagerSurvey - No bwmConfig found in localStorage')
     }
   }
 

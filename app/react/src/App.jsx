@@ -1,10 +1,11 @@
 import React, { useState } from 'react'
 import { Layout, Typography, Tabs, Alert } from 'antd'
-import { CalculatorOutlined, UserOutlined, SettingOutlined } from '@ant-design/icons'
+import { CalculatorOutlined, UserOutlined, SettingOutlined, FormOutlined } from '@ant-design/icons'
 import PROMETHEEIIScoringInterface from './components/PROMETHEEIIScoringInterface'
 import OptimizationInterface from './components/OptimizationInterface'
 import SupplierDataInterface from './components/SupplierDataInterface'
 import AdminSupplierManagement from './components/AdminSupplierManagement'
+import DepotManagerSurvey from './components/DepotManagerSurvey'
 import './App.css'
 
 const { Header, Content } = Layout
@@ -34,6 +35,16 @@ function App() {
         </span>
       ),
       children: <AdminSupplierManagement />
+    },
+    {
+      key: 'depot_manager_survey',
+      label: (
+        <span>
+          <FormOutlined />
+          Depot Manager Survey
+        </span>
+      ),
+      children: <DepotManagerSurvey />
     },
     {
       key: 'promethee_scoring',
