@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { 
   Card, 
   Table, 
@@ -76,7 +76,7 @@ const AdminSupplierManagement = () => {
     fetchDepots()
     fetchValidationData()
     fetchApprovedData()
-    fetchDepotEvaluations()
+    fetchSupplierEvaluations()
     
     // Load BWM config from localStorage
     const savedConfig = localStorage.getItem('bwmConfig')
@@ -98,6 +98,7 @@ const AdminSupplierManagement = () => {
       // Don't override supplierNames from localStorage - we'll populate from database
       setBwmConfig(config)
     }
+    
   }, [])
 
   const fetchSubmissions = async () => {
@@ -177,13 +178,13 @@ const AdminSupplierManagement = () => {
     }
   }
 
-  const fetchDepotEvaluations = async () => {
+  const fetchSupplierEvaluations = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/depot-evaluations/')
+      const response = await fetch('http://localhost:8000/api/supplier-evaluations/')
       const data = await response.json()
       setDepotEvaluations(data.evaluations || [])
     } catch (error) {
-      console.error('Error fetching depot evaluations:', error)
+      console.error('Error fetching supplier evaluations:', error)
     }
   }
 
@@ -299,7 +300,7 @@ const AdminSupplierManagement = () => {
         const result = await response.json()
         message.success(`${result.message}. Cleaned ${result.cleaned} duplicate submissions.`)
         fetchApprovedData()
-        fetchDepotEvaluations()
+        fetchSupplierEvaluations()
       } else {
         message.error('Failed to clean duplicates')
       }
@@ -951,7 +952,7 @@ const AdminSupplierManagement = () => {
             <Button
               type="primary"
               icon={<BarChartOutlined />}
-              onClick={fetchDepotEvaluations}
+              onClick={fetchSupplierEvaluations}
               style={{ marginRight: 8 }}
               size="small"
             >
@@ -975,7 +976,7 @@ const AdminSupplierManagement = () => {
                   cancelText: 'Cancel',
                   okType: 'danger',
                   onOk: async () => {
-                    await clearDepotEvaluations()
+                    await clearSupplierEvaluations()
                   }
                 })
               }}
@@ -1053,6 +1054,7 @@ const AdminSupplierManagement = () => {
       setBwmConfig(newConfig)
       localStorage.setItem('bwmConfig', JSON.stringify(newConfig))
       
+      
       // Trigger storage event for cross-component sync
       window.dispatchEvent(new StorageEvent('storage', {
         key: 'bwmConfig',
@@ -1062,11 +1064,12 @@ const AdminSupplierManagement = () => {
       
       // Close modal
       setCriteriaWarningModal({ visible: false, type: null, pendingConfig: null })
+      setIsShowingModal(false)
       
       message.success(`Criteria configuration updated successfully! ${result.message}`)
       
       // Refresh evaluations to show cleared data
-      fetchDepotEvaluations()
+      fetchSupplierEvaluations()
       
     } catch (error) {
       console.error('Error updating criteria:', error)
@@ -1088,11 +1091,18 @@ const AdminSupplierManagement = () => {
     const [tempWorstCriterion, setTempWorstCriterion] = useState(bwmConfig.worstCriterion)
     const [tempBestToOthers, setTempBestToOthers] = useState({...bwmConfig.bestToOthers})
     const [tempOthersToWorst, setTempOthersToWorst] = useState({...bwmConfig.othersToWorst})
-    const [bwmResults, setBwmResults] = useState(null)
     const [bwmLoading, setBwmLoading] = useState(false)
+    const [savedBwmWeights, setSavedBwmWeights] = useState(null)
+    const [isShowingModal, setIsShowingModal] = useState(false)
     
-    // Update temp state when bwmConfig changes
+    
+    // Update temp state when bwmConfig changes (but not when warning modal is showing)
     useEffect(() => {
+      // Don't reset temp state if warning modal is visible or about to be shown
+      if (criteriaWarningModal.visible || isShowingModal) {
+        return
+      }
+      
       setTempConfig({
         numCriteria: bwmConfig.numCriteria
       })
@@ -1101,18 +1111,40 @@ const AdminSupplierManagement = () => {
       setTempWorstCriterion(bwmConfig.worstCriterion)
       setTempBestToOthers({...bwmConfig.bestToOthers})
       setTempOthersToWorst({...bwmConfig.othersToWorst})
-    }, [bwmConfig])
+    }, [bwmConfig, criteriaWarningModal.visible, isShowingModal])
     
-    const clearDepotEvaluations = async () => {
+    // Load saved BWM weights from backend
+    const loadSavedBwmWeights = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/depot-evaluations/clear', {
+        const response = await fetch('http://localhost:8000/api/bwm/weights/')
+        const data = await response.json()
+        
+        if (response.ok && data.success && data.data) {
+          setSavedBwmWeights(data.data)
+        } else {
+          setSavedBwmWeights(null)
+        }
+      } catch (error) {
+        console.error('Error loading saved BWM weights:', error)
+        setSavedBwmWeights(null)
+      }
+    }
+    
+    // Load saved weights on component mount
+    useEffect(() => {
+      loadSavedBwmWeights()
+    }, [])
+    
+    const clearSupplierEvaluations = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/supplier-evaluations/clear', {
           method: 'DELETE'
         })
         const result = await response.json()
         
         if (response.ok) {
-          message.success(`${result.cleared_count} depot evaluations cleared successfully!`)
-          fetchDepotEvaluations() // Refresh the depot evaluations list
+          message.success(`${result.cleared_count} supplier evaluations cleared successfully!`)
+          fetchSupplierEvaluations() // Refresh the supplier evaluations list
         } else {
           throw new Error(result.detail || 'Failed to clear evaluations')
         }
@@ -1126,8 +1158,18 @@ const AdminSupplierManagement = () => {
       console.log('updateBasicConfig called, tempConfig:', tempConfig)
       console.log('Current criteriaWarningModal state:', criteriaWarningModal)
       
+      // Set flag to prevent state resets
+      setIsShowingModal(true)
+      
       // Show warning modal with pending configuration
-      const newNames = Array(tempConfig.numCriteria).fill('').map((_, i) => `Criteria ${i + 1}`)
+      // Preserve existing criteria names and only add new ones if increasing
+      const newNames = Array(tempConfig.numCriteria).fill('').map((_, i) => {
+        if (i < tempCriteriaNames.length && tempCriteriaNames[i]) {
+          return tempCriteriaNames[i] // Keep existing name
+        } else {
+          return `Criteria ${i + 1}` // Add default name for new criteria
+        }
+      })
       const pendingConfig = {
         numCriteria: tempConfig.numCriteria,
         criteriaNames: newNames
@@ -1150,6 +1192,9 @@ const AdminSupplierManagement = () => {
       console.log('updateCriteriaNames called:', tempCriteriaNames)
       console.log('Current criteriaWarningModal state:', criteriaWarningModal)
       
+      // Set flag to prevent state resets
+      setIsShowingModal(true)
+      
       // Show warning modal with pending configuration
       const pendingConfig = {
         numCriteria: bwmConfig.numCriteria,
@@ -1170,6 +1215,8 @@ const AdminSupplierManagement = () => {
     }
     
     const calculateBWMWeights = async () => {
+      console.log('🚀 BWM CALCULATION & SAVE STARTED')
+      
       if (!tempBestCriterion || !tempWorstCriterion) {
         message.error('Please select both best and worst criteria')
         return
@@ -1196,7 +1243,8 @@ const AdminSupplierManagement = () => {
       setBwmLoading(true)
       
       try {
-        const response = await fetch('http://localhost:8000/api/bwm/calculate/', {
+        // Step 1: Calculate BWM weights
+        const calculateResponse = await fetch('http://localhost:8000/api/bwm/calculate/', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1210,22 +1258,53 @@ const AdminSupplierManagement = () => {
           })
         })
         
-        if (!response.ok) {
+        if (!calculateResponse.ok) {
           throw new Error('Failed to calculate BWM weights')
         }
         
-        const data = await response.json()
-        setBwmResults(data.data)
+        const calculateData = await calculateResponse.json()
+        
+        if (!calculateData.success || !calculateData.data) {
+          throw new Error('Invalid response from BWM calculation')
+        }
+        
+        console.log('BWM calculation successful:', calculateData.data)
+        
+        // Step 2: Save weights to database immediately
+        const saveResponse = await fetch('http://localhost:8000/api/bwm/save/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            criteria_names: tempCriteriaNames,
+            weights: calculateData.data.weights,
+            best_criterion: tempBestCriterion,
+            worst_criterion: tempWorstCriterion,
+            best_to_others: tempBestToOthers,
+            others_to_worst: tempOthersToWorst,
+            consistency_ratio: calculateData.data.consistency_ratio,
+            consistency_interpretation: calculateData.data.consistency_interpretation,
+            created_by: 'admin'
+          })
+        })
+        
+        if (!saveResponse.ok) {
+          throw new Error('Failed to save BWM weights to database')
+        }
+        
+        const saveData = await saveResponse.json()
+        console.log('BWM weights saved to database:', saveData)
         
         // Update the config with calculated weights
         const newConfig = {
           ...bwmConfig,
-          criteriaWeights: tempCriteriaNames.map(name => data.data.weights[name]),
+          criteriaWeights: tempCriteriaNames.map(name => calculateData.data.weights[name]),
           bestCriterion: tempBestCriterion,
           worstCriterion: tempWorstCriterion,
           bestToOthers: tempBestToOthers,
           othersToWorst: tempOthersToWorst,
-          consistencyRatio: data.data.consistency_ratio
+          consistencyRatio: calculateData.data.consistency_ratio
         }
         
         setBwmConfig(newConfig)
@@ -1238,15 +1317,24 @@ const AdminSupplierManagement = () => {
           storageArea: localStorage
         }))
         
-        message.success('BWM weights calculated successfully!')
+        const consistencyText = calculateData.data.consistency_ratio <= 0.1 ? 'excellent' : 
+                              calculateData.data.consistency_ratio <= 0.2 ? 'good' : 'acceptable'
+        
+        message.success(
+          `BWM weights calculated and saved successfully! Consistency: ${consistencyText} (${calculateData.data.consistency_ratio.toFixed(4)})`
+        )
+        
+        // Refresh the saved weights display
+        loadSavedBwmWeights()
         
       } catch (error) {
-        console.error('Error calculating BWM weights:', error)
-        message.error('Failed to calculate BWM weights')
+        console.error('Error in BWM calculation/save:', error)
+        message.error(`Failed to calculate and save BWM weights: ${error.message}`)
       } finally {
         setBwmLoading(false)
       }
     }
+    
     
     return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -1400,37 +1488,42 @@ const AdminSupplierManagement = () => {
         </Space>
       </Card>
 
-      {bwmResults && (
-        <Card title="Step 4: BWM Results" extra={<CheckCircleOutlined />}>
+      {savedBwmWeights && (
+        <Card title="Current Saved BWM Weights" extra={<CheckCircleOutlined style={{ color: '#52c41a' }} />}>
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <div>
-              <Text strong>Calculated Weights:</Text>
-              <div style={{ marginTop: '10px' }}>
-                {tempCriteriaNames.map((name, index) => (
-                  <div key={index} style={{ marginBottom: '8px' }}>
-                    <Text>{`${name}: ${bwmResults.weights[name]?.toFixed(4) || 'N/A'}`}</Text>
-                  </div>
-                ))}
-              </div>
+              <Text strong>Weights: </Text>
+              {savedBwmWeights.criteria_names.map((name, index) => (
+                <Tag key={index} color="blue" style={{ margin: '2px' }}>
+                  {name}: {savedBwmWeights.weights[name].toFixed(4)}
+                </Tag>
+              ))}
             </div>
             
             <div>
-              <Text strong>Consistency Ratio: </Text>
-              <Text type={bwmResults.consistency_ratio <= 0.1 ? 'success' : 'warning'}>
-                {bwmResults.consistency_ratio?.toFixed(4)} 
-                ({bwmResults.consistency_interpretation})
+              <Text strong>Consistency: </Text>
+              <Tag color={savedBwmWeights.consistency_ratio <= 0.1 ? 'green' : savedBwmWeights.consistency_ratio <= 0.2 ? 'orange' : 'red'}>
+                {savedBwmWeights.consistency_ratio.toFixed(4)} - {savedBwmWeights.consistency_interpretation}
+              </Tag>
+            </div>
+            
+            <div>
+              <Text strong>Created: </Text>
+              <Text type="secondary">
+                {new Date(savedBwmWeights.created_at).toLocaleString()} by {savedBwmWeights.created_by}
               </Text>
             </div>
             
             <Alert
-              message="Configuration Complete"
-              description="These criteria names and weights will be used in the PROMETHEE II Supplier Scoring interface for evaluation."
-              type="success"
+              message="These are the weights currently used in PROMETHEE II calculations"
+              type="info"
               showIcon
+              style={{ marginTop: '8px' }}
             />
           </Space>
         </Card>
       )}
+
     </Space>
     )
   }
@@ -1596,11 +1689,17 @@ const AdminSupplierManagement = () => {
           </div>
         }
         open={criteriaWarningModal.visible}
-        onCancel={() => setCriteriaWarningModal({ visible: false, type: null, pendingConfig: null })}
+        onCancel={() => {
+          setCriteriaWarningModal({ visible: false, type: null, pendingConfig: null })
+          setIsShowingModal(false)
+        }}
         footer={[
           <Button 
             key="cancel" 
-            onClick={() => setCriteriaWarningModal({ visible: false, type: null, pendingConfig: null })}
+            onClick={() => {
+              setCriteriaWarningModal({ visible: false, type: null, pendingConfig: null })
+              setIsShowingModal(false)
+            }}
           >
             Cancel
           </Button>,

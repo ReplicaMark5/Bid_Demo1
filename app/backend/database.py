@@ -80,44 +80,19 @@ class SupplierDatabase:
                 )
             """)
             
-            # Create supplier_scores table for PROMETHEE II data
+            
+            
+            # Create supplier_evaluations table for PROMETHEE II data (JSON format like depot_evaluations)
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS supplier_scores (
+                CREATE TABLE IF NOT EXISTS supplier_evaluations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     supplier_id INTEGER NOT NULL,
-                    total_score REAL NOT NULL,
-                    criteria_scores TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
-                )
-            """)
-            
-            # Create depot_managers table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS depot_managers (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    email TEXT,
-                    depot_id INTEGER NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (depot_id) REFERENCES depots (id)
-                )
-            """)
-            
-            # Create depot_evaluations table for PROMETHEE II data
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS depot_evaluations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    depot_id INTEGER NOT NULL,
-                    supplier_id INTEGER NOT NULL,
-                    criterion_name TEXT NOT NULL,
-                    score REAL NOT NULL,
                     manager_name TEXT,
                     manager_email TEXT,
+                    criteria_scores TEXT NOT NULL,
                     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (depot_id) REFERENCES depots (id),
                     FOREIGN KEY (supplier_id) REFERENCES suppliers (id),
-                    UNIQUE(depot_id, supplier_id, criterion_name)
+                    UNIQUE(supplier_id, manager_name)
                 )
             """)
             
@@ -134,6 +109,23 @@ class SupplierDatabase:
                     criteria_weights TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
+                )
+            """)
+            
+            # Create bwm_weights table for storing BWM weight configurations
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bwm_weights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    criteria_names TEXT NOT NULL,
+                    weights TEXT NOT NULL,
+                    best_criterion TEXT NOT NULL,
+                    worst_criterion TEXT NOT NULL,
+                    best_to_others TEXT NOT NULL,
+                    others_to_worst TEXT NOT NULL,
+                    consistency_ratio REAL,
+                    consistency_interpretation TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT
                 )
             """)
             
@@ -388,30 +380,7 @@ class SupplierDatabase:
         """Get submissions by status"""
         return self.get_supplier_submissions(status=status)
     
-    def save_supplier_scores(self, supplier_id: int, total_score: float, criteria_scores: str) -> int:
-        """Save supplier PROMETHEE II scores"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO supplier_scores 
-                (supplier_id, total_score, criteria_scores)
-                VALUES (?, ?, ?)
-            """, (supplier_id, total_score, criteria_scores))
-            return cursor.lastrowid
     
-    def get_supplier_scores(self) -> List[Dict]:
-        """Get all supplier scores"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT s.supplier_id, sup.name as supplier_name, 
-                       s.total_score, s.criteria_scores
-                FROM supplier_scores s
-                JOIN suppliers sup ON s.supplier_id = sup.id
-                ORDER BY s.total_score DESC
-            """)
-            columns = [desc[0] for desc in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
     
     def export_to_optimizer_format(self) -> Dict[str, pd.DataFrame]:
         """Export approved data in the format expected by SelectiveNAFlexibleEConstraintOptimizer"""
@@ -432,14 +401,11 @@ class SupplierDatabase:
             """
             obj1_df = pd.read_sql_query(obj1_query, conn)
             
-            # Get Obj2_Coeff data (scoring data)
+            # Get Obj2_Coeff data (scoring data) - use default scores since supplier_scores table removed
             suppliers = self.get_suppliers()
-            scores_data = self.get_supplier_scores()
             
-            # Create scores dataframe in the expected format
-            scores_dict = {f"Supplier {s['id']}": 0 for s in suppliers}
-            for score in scores_data:
-                scores_dict[f"Supplier {score['supplier_id']}"] = score['total_score']
+            # Create scores dataframe with default scores (optimizer reads from uploaded Excel anyway)
+            scores_dict = {f"Supplier {s['id']}": 5.0 for s in suppliers}  # Default neutral score
             
             # Create the scores dataframe with the expected format
             obj2_data = [['Total Score', 1.0] + list(scores_dict.values())]
@@ -516,76 +482,72 @@ class SupplierDatabase:
             columns = [desc[0] for desc in cursor.description]
             return [dict(zip(columns, row)) for row in rows]
     
-    def add_depot_manager(self, name: str, email: str, depot_id: int) -> int:
-        """Add a new depot manager"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO depot_managers (name, email, depot_id) VALUES (?, ?, ?)",
-                (name, email, depot_id)
-            )
-            return cursor.lastrowid
     
-    def get_depot_managers(self, depot_id: int = None) -> List[Dict]:
-        """Get depot managers, optionally filtered by depot"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            query = """
-                SELECT dm.id, dm.name, dm.email, dm.depot_id, d.name as depot_name
-                FROM depot_managers dm
-                JOIN depots d ON dm.depot_id = d.id
-            """
-            params = []
-            if depot_id:
-                query += " WHERE dm.depot_id = ?"
-                params.append(depot_id)
-            
-            cursor.execute(query, params)
-            columns = [desc[0] for desc in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
     
-    def submit_depot_evaluation(self, depot_id: int, supplier_id: int, criteria_scores: Dict[str, float], 
-                               manager_name: str = None, manager_email: str = None) -> int:
-        """Submit a depot evaluation with all criteria scores as JSON"""
+    def submit_supplier_evaluation(self, supplier_id: int, criteria_scores: Dict[str, float], 
+                                   manager_name: str = None, manager_email: str = None) -> int:
+        """Submit a supplier evaluation with all criteria scores as JSON"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             criteria_scores_json = json.dumps(criteria_scores)
             cursor.execute("""
-                INSERT OR REPLACE INTO depot_evaluations 
-                (depot_id, supplier_id, manager_name, manager_email, criteria_scores)
-                VALUES (?, ?, ?, ?, ?)
-            """, (depot_id, supplier_id, manager_name, manager_email, criteria_scores_json))
+                INSERT OR REPLACE INTO supplier_evaluations 
+                (supplier_id, manager_name, manager_email, criteria_scores)
+                VALUES (?, ?, ?, ?)
+            """, (supplier_id, manager_name, manager_email, criteria_scores_json))
             return cursor.lastrowid
     
-    def get_depot_evaluations(self, depot_id: int = None, supplier_id: int = None) -> List[Dict]:
-        """Get depot evaluations with optional filtering"""
+    def submit_supplier_evaluations_batch(self, evaluations: List[Dict], manager_name: str, manager_email: str) -> List[int]:
+        """Submit multiple supplier evaluations at once"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Group evaluations by supplier_id to create JSON criteria scores
+            supplier_evaluations = {}
+            
+            for evaluation in evaluations:
+                supplier_id = evaluation['supplier_id']
+                if supplier_id not in supplier_evaluations:
+                    supplier_evaluations[supplier_id] = {}
+                
+                supplier_evaluations[supplier_id][evaluation['criterion_name']] = evaluation['score']
+            
+            # Submit one evaluation per supplier with all criteria scores
+            evaluation_ids = []
+            for supplier_id, criteria_scores in supplier_evaluations.items():
+                criteria_scores_json = json.dumps(criteria_scores)
+                cursor.execute("""
+                    INSERT OR REPLACE INTO supplier_evaluations 
+                    (supplier_id, manager_name, manager_email, criteria_scores)
+                    VALUES (?, ?, ?, ?)
+                """, (supplier_id, manager_name, manager_email, criteria_scores_json))
+                evaluation_ids.append(cursor.lastrowid)
+            
+            return evaluation_ids
+    
+    def get_supplier_evaluations(self, supplier_id: int = None) -> List[Dict]:
+        """Get supplier evaluations with optional filtering"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             query = """
-                SELECT de.id, de.depot_id, d.name as depot_name,
-                       de.supplier_id, s.name as supplier_name,
-                       de.manager_name, de.manager_email, de.criteria_scores,
-                       de.submitted_at
-                FROM depot_evaluations de
-                JOIN depots d ON de.depot_id = d.id
-                JOIN suppliers s ON de.supplier_id = s.id
+                SELECT se.id, se.supplier_id, s.name as supplier_name,
+                       se.manager_name, se.manager_email, se.criteria_scores,
+                       se.submitted_at
+                FROM supplier_evaluations se
+                JOIN suppliers s ON se.supplier_id = s.id
             """
             
             conditions = []
             params = []
             
-            if depot_id:
-                conditions.append("de.depot_id = ?")
-                params.append(depot_id)
-            
             if supplier_id:
-                conditions.append("de.supplier_id = ?")
+                conditions.append("se.supplier_id = ?")
                 params.append(supplier_id)
             
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
             
-            query += " ORDER BY de.submitted_at DESC"
+            query += " ORDER BY se.submitted_at DESC"
             
             cursor.execute(query, params)
             
@@ -594,14 +556,12 @@ class SupplierDatabase:
             for row in cursor.fetchall():
                 result = {
                     'id': row[0],
-                    'depot_id': row[1],
-                    'depot_name': row[2],
-                    'supplier_id': row[3],
-                    'supplier_name': row[4],
-                    'manager_name': row[5],
-                    'manager_email': row[6],
-                    'criteria_scores': json.loads(row[7]),
-                    'submitted_at': row[8]
+                    'supplier_id': row[1],
+                    'supplier_name': row[2],
+                    'manager_name': row[3],
+                    'manager_email': row[4],
+                    'criteria_scores': json.loads(row[5]),
+                    'submitted_at': row[6]
                 }
                 results.append(result)
             return results
@@ -614,7 +574,7 @@ class SupplierDatabase:
             # Get all evaluations with JSON criteria scores
             cursor.execute("""
                 SELECT supplier_id, criteria_scores
-                FROM depot_evaluations
+                FROM supplier_evaluations
             """)
             
             # Initialize result structure
@@ -662,7 +622,7 @@ class SupplierDatabase:
             # Count unique evaluations per supplier (now one row per manager evaluation)
             cursor.execute("""
                 SELECT supplier_id, COUNT(*) as manager_count
-                FROM depot_evaluations
+                FROM supplier_evaluations
                 GROUP BY supplier_id
             """)
             
@@ -673,21 +633,21 @@ class SupplierDatabase:
             
             return result
     
-    def clear_depot_evaluations(self) -> Dict:
-        """Clear all depot evaluations and return count of cleared records"""
+    def clear_supplier_evaluations(self) -> Dict:
+        """Clear all supplier evaluations and return count of cleared records"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
             # Get count before clearing
-            cursor.execute("SELECT COUNT(*) FROM depot_evaluations")
+            cursor.execute("SELECT COUNT(*) FROM supplier_evaluations")
             count_before = cursor.fetchone()[0]
             
-            # Clear all depot evaluations
-            cursor.execute("DELETE FROM depot_evaluations")
+            # Clear all supplier evaluations
+            cursor.execute("DELETE FROM supplier_evaluations")
             conn.commit()
             
             return {
-                "message": "All depot evaluations cleared successfully",
+                "message": "All supplier evaluations cleared successfully",
                 "cleared_count": count_before
             }
     
@@ -766,40 +726,85 @@ class SupplierDatabase:
             cursor = conn.cursor()
             
             # Total evaluations (now represents complete manager evaluations)
-            cursor.execute("SELECT COUNT(*) FROM depot_evaluations")
+            cursor.execute("SELECT COUNT(*) FROM supplier_evaluations")
             total_evaluations = cursor.fetchone()[0]
             
             # Evaluations by supplier (count of complete evaluations)
             cursor.execute("""
-                SELECT s.name, COUNT(de.id) as evaluation_count
+                SELECT s.name, COUNT(se.id) as evaluation_count
                 FROM suppliers s
-                LEFT JOIN depot_evaluations de ON s.id = de.supplier_id
+                LEFT JOIN supplier_evaluations se ON s.id = se.supplier_id
                 GROUP BY s.id, s.name
                 ORDER BY evaluation_count DESC
             """)
             supplier_evaluations = [{"supplier": row[0], "count": row[1]} for row in cursor.fetchall()]
             
-            # Evaluations by depot (count of complete evaluations)
-            cursor.execute("""
-                SELECT d.name, COUNT(de.id) as evaluation_count
-                FROM depots d
-                LEFT JOIN depot_evaluations de ON d.id = de.depot_id
-                GROUP BY d.id, d.name
-                ORDER BY evaluation_count DESC
-            """)
-            depot_evaluations = [{"depot": row[0], "count": row[1]} for row in cursor.fetchall()]
-            
-            # Count unique suppliers and depots that have been evaluated
-            cursor.execute("SELECT COUNT(DISTINCT supplier_id) FROM depot_evaluations")
+            # Count unique suppliers that have been evaluated
+            cursor.execute("SELECT COUNT(DISTINCT supplier_id) FROM supplier_evaluations")
             suppliers_evaluated = cursor.fetchone()[0]
             
-            cursor.execute("SELECT COUNT(DISTINCT depot_id) FROM depot_evaluations")
-            depots_participated = cursor.fetchone()[0]
+            # Count unique managers who participated
+            cursor.execute("SELECT COUNT(DISTINCT manager_name) FROM supplier_evaluations WHERE manager_name IS NOT NULL")
+            managers_participated = cursor.fetchone()[0]
             
             return {
                 "total_evaluations": total_evaluations,
                 "supplier_evaluations": supplier_evaluations,
-                "depot_evaluations": depot_evaluations,
                 "suppliers_evaluated": suppliers_evaluated,
-                "depots_participated": depots_participated
+                "managers_participated": managers_participated
             }
+    
+    def save_bwm_weights(self, criteria_names: List[str], weights: Dict[str, float], 
+                        best_criterion: str, worst_criterion: str, 
+                        best_to_others: Dict[str, float], others_to_worst: Dict[str, float],
+                        consistency_ratio: float, consistency_interpretation: str,
+                        created_by: str = None) -> int:
+        """Save BWM weights configuration to database"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO bwm_weights 
+                (criteria_names, weights, best_criterion, worst_criterion, 
+                 best_to_others, others_to_worst, consistency_ratio, 
+                 consistency_interpretation, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                json.dumps(criteria_names),
+                json.dumps(weights),
+                best_criterion,
+                worst_criterion,
+                json.dumps(best_to_others),
+                json.dumps(others_to_worst),
+                consistency_ratio,
+                consistency_interpretation,
+                created_by
+            ))
+            return cursor.lastrowid
+    
+    def get_latest_bwm_weights(self) -> Optional[Dict]:
+        """Get the most recent BWM weights configuration"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT criteria_names, weights, best_criterion, worst_criterion,
+                       best_to_others, others_to_worst, consistency_ratio,
+                       consistency_interpretation, created_at, created_by
+                FROM bwm_weights
+                ORDER BY created_at DESC
+                LIMIT 1
+            """)
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'criteria_names': json.loads(row[0]),
+                    'weights': json.loads(row[1]),
+                    'best_criterion': row[2],
+                    'worst_criterion': row[3],
+                    'best_to_others': json.loads(row[4]),
+                    'others_to_worst': json.loads(row[5]),
+                    'consistency_ratio': row[6],
+                    'consistency_interpretation': row[7],
+                    'created_at': row[8],
+                    'created_by': row[9]
+                }
+            return None

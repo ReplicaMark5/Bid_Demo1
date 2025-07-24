@@ -26,7 +26,6 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [suppliers, setSuppliers] = useState([])
-  const [depots, setDepots] = useState([])
   const [criteriaNames, setCriteriaNames] = useState([])
   const [selectedSuppliers, setSelectedSuppliers] = useState([])
   const [evaluations, setEvaluations] = useState({})
@@ -34,7 +33,6 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
 
   useEffect(() => {
     fetchSuppliers()
-    fetchDepots()
     loadCriteriaFromConfig()
   }, [])
 
@@ -58,16 +56,6 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
     }
   }
 
-  const fetchDepots = async () => {
-    try {
-      const response = await fetch('http://localhost:8000/api/depots/')
-      const data = await response.json()
-      setDepots(data.depots || [])
-    } catch (error) {
-      console.error('Error fetching depots:', error)
-      message.error('Failed to fetch depots')
-    }
-  }
 
   const loadCriteriaFromConfig = () => {
     const savedConfig = localStorage.getItem('bwmConfig')
@@ -107,7 +95,7 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
   const handleSubmit = async (values) => {
     setSubmitting(true)
     try {
-      const { depot_id, manager_name, manager_email } = values
+      const { manager_name, manager_email } = values
       
       // Prepare evaluations array
       const evaluationsArray = []
@@ -130,13 +118,12 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
       }
 
       // Submit batch evaluation
-      const response = await fetch('http://localhost:8000/api/depot-evaluations/submit-batch', {
+      const response = await fetch('http://localhost:8000/api/supplier-evaluations/submit-batch', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          depot_id: parseInt(depot_id),
           manager_name,
           manager_email,
           evaluations: evaluationsArray
@@ -185,10 +172,10 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
     <div>
       <Card>
         <Title level={3}>
-          <UserOutlined /> Depot Manager Supplier Evaluation Survey
+          <UserOutlined /> Supplier Evaluation Survey
         </Title>
         <Text type="secondary">
-          Please evaluate suppliers based on your depot's experience with them. 
+          Please evaluate suppliers based on your organization's experience with them. 
           Only evaluate suppliers you have worked with directly.
         </Text>
       </Card>
@@ -196,22 +183,7 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
       <Card style={{ marginTop: 24 }}>
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Row gutter={24}>
-            <Col span={8}>
-              <Form.Item
-                name="depot_id"
-                label="Select Your Depot"
-                rules={[{ required: true, message: 'Please select your depot' }]}
-              >
-                <Select placeholder="Select depot">
-                  {depots.map(depot => (
-                    <Option key={depot.id} value={depot.id}>
-                      {depot.name}
-                    </Option>
-                  ))}
-                </Select>
-              </Form.Item>
-            </Col>
-            <Col span={8}>
+            <Col span={12}>
               <Form.Item
                 name="manager_name"
                 label="Your Name"
@@ -220,7 +192,7 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
                 <Input placeholder="Enter your full name" />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={12}>
               <Form.Item
                 name="manager_email"
                 label="Your Email"
@@ -239,7 +211,7 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
           <Title level={4}>Step 1: Select Suppliers You Have Experience With</Title>
           <Alert
             message="Important"
-            description="Only select suppliers that your depot has worked with. You should have direct experience with these suppliers to provide accurate evaluations."
+            description="Only select suppliers that your organization has worked with. You should have direct experience with these suppliers to provide accurate evaluations."
             type="warning"
             showIcon
             style={{ marginBottom: 16 }}

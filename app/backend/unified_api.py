@@ -71,6 +71,17 @@ class BWMRequest(BaseModel):
     best_to_others: Dict[str, float]
     others_to_worst: Dict[str, float]
 
+class BWMSaveRequest(BaseModel):
+    criteria_names: List[str]
+    weights: Dict[str, float]
+    best_criterion: str
+    worst_criterion: str
+    best_to_others: Dict[str, float]
+    others_to_worst: Dict[str, float]
+    consistency_ratio: float
+    consistency_interpretation: str
+    created_by: Optional[str] = None
+
 class DepotCreate(BaseModel):
     name: str
     annual_volume: Optional[float] = None
@@ -98,10 +109,6 @@ class SupplierDataSubmission(BaseModel):
             raise ValueError('Zone differential is required')
         return v
 
-class SupplierScores(BaseModel):
-    supplier_id: int
-    total_score: float
-    criteria_scores: Dict[str, float]
 
 class ApprovalRequest(BaseModel):
     submission_id: int
@@ -117,16 +124,14 @@ class BulkDataSubmission(BaseModel):
 
 # Legacy AHP models removed - now using PROMETHEE II
 
-class DepotEvaluationRequest(BaseModel):
-    depot_id: int
+class SupplierEvaluationRequest(BaseModel):
     supplier_id: int
     criterion_name: str
     score: float
     manager_name: Optional[str] = None
     manager_email: Optional[str] = None
 
-class DepotEvaluationBatchRequest(BaseModel):
-    depot_id: int
+class SupplierEvaluationBatchRequest(BaseModel):
     manager_name: str
     manager_email: str
     evaluations: List[Dict[str, Any]]  # List of {supplier_id, criterion_name, score}
@@ -134,6 +139,7 @@ class DepotEvaluationBatchRequest(BaseModel):
 class PROMETHEECalculationRequest(BaseModel):
     criteria_names: List[str]
     criteria_weights: List[float]
+    preference_functions: Optional[Dict[str, str]] = None
     preference_thresholds: Optional[Dict[str, float]] = None
     indifference_thresholds: Optional[Dict[str, float]] = None
 
@@ -225,6 +231,7 @@ async def get_ai_score(description: str, criterion: str) -> int:
 # PROMETHEE II calculation function
 def calculate_promethee_ii(supplier_scores: Dict[int, Dict[str, float]], 
                           criteria_weights: Dict[str, float],
+                          preference_functions: Dict[str, str] = None,
                           preference_thresholds: Dict[str, float] = None,
                           indifference_thresholds: Dict[str, float] = None) -> Dict[str, Any]:
     """
@@ -234,14 +241,70 @@ def calculate_promethee_ii(supplier_scores: Dict[int, Dict[str, float]],
     criteria = list(criteria_weights.keys())
     n_suppliers = len(suppliers)
     
-    # Initialize preference thresholds if not provided
+    # Initialize parameters if not provided
+    if preference_functions is None:
+        preference_functions = {criterion: 'linear' for criterion in criteria}
     if preference_thresholds is None:
         preference_thresholds = {criterion: 2.0 for criterion in criteria}
     if indifference_thresholds is None:
         indifference_thresholds = {criterion: 0.5 for criterion in criteria}
     
+    def calculate_preference_value(diff: float, function_type: str, 
+                                 indiff_threshold: float, pref_threshold: float) -> float:
+        """Calculate preference value based on function type"""
+        if function_type == 'usual':
+            return 1.0 if diff > 0 else 0.0
+            
+        elif function_type == 'u_shape':
+            return 1.0 if diff > indiff_threshold else 0.0
+            
+        elif function_type == 'v_shape':
+            if diff <= 0:
+                return 0.0
+            elif diff >= pref_threshold:
+                return 1.0
+            else:
+                return diff / pref_threshold
+                
+        elif function_type == 'level':
+            if diff <= indiff_threshold:
+                return 0.0
+            elif diff >= pref_threshold:
+                return 1.0
+            else:
+                return 0.5  # Plateau level
+                
+        elif function_type == 'linear':
+            if diff <= indiff_threshold:
+                return 0.0
+            elif diff >= pref_threshold:
+                return 1.0
+            else:
+                return (diff - indiff_threshold) / (pref_threshold - indiff_threshold)
+                
+        elif function_type == 'gaussian':
+            if diff <= 0:
+                return 0.0
+            else:
+                # Gaussian with sigma = preference_threshold / 2
+                sigma = pref_threshold / 2
+                return 1 - np.exp(-(diff**2) / (2 * sigma**2))
+                
+        else:  # Default to linear
+            if diff <= indiff_threshold:
+                return 0.0
+            elif diff >= pref_threshold:
+                return 1.0
+            else:
+                return (diff - indiff_threshold) / (pref_threshold - indiff_threshold)
+
     # Calculate pairwise preferences
     preference_matrix = np.zeros((n_suppliers, n_suppliers))
+    criteria_preference_matrices = {}
+    
+    # Initialize per-criteria matrices
+    for criterion in criteria:
+        criteria_preference_matrices[criterion] = np.zeros((n_suppliers, n_suppliers))
     
     for i, supplier_a in enumerate(suppliers):
         for j, supplier_b in enumerate(suppliers):
@@ -255,17 +318,18 @@ def calculate_promethee_ii(supplier_scores: Dict[int, Dict[str, float]],
                     # Calculate difference (assuming higher is better)
                     diff = score_a - score_b
                     
-                    # Calculate preference function (Linear preference function)
-                    if diff <= indifference_thresholds[criterion]:
-                        preference = 0.0
-                    elif diff >= preference_thresholds[criterion]:
-                        preference = 1.0
-                    else:
-                        # Linear interpolation between indifference and preference
-                        preference = (diff - indifference_thresholds[criterion]) / \
-                                   (preference_thresholds[criterion] - indifference_thresholds[criterion])
+                    # Calculate preference using selected function type
+                    preference = calculate_preference_value(
+                        diff,
+                        preference_functions.get(criterion, 'linear'),
+                        indifference_thresholds[criterion],
+                        preference_thresholds[criterion]
+                    )
                     
-                    # Weight the preference
+                    # Store unweighted preference for per-criteria analysis
+                    criteria_preference_matrices[criterion][i][j] = preference
+                    
+                    # Weight the preference for aggregated matrix
                     aggregated_preference += criteria_weights[criterion] * preference
                 
                 preference_matrix[i][j] = aggregated_preference
@@ -281,6 +345,25 @@ def calculate_promethee_ii(supplier_scores: Dict[int, Dict[str, float]],
         negative_flows = np.zeros(n_suppliers)
         net_flows = np.zeros(n_suppliers)
     
+    # Calculate per-criteria flows
+    criteria_flows = {}
+    for criterion in criteria:
+        criteria_matrix = criteria_preference_matrices[criterion]
+        if criteria_matrix.size > 0:
+            criteria_positive_flows = np.mean(criteria_matrix, axis=1)
+            criteria_negative_flows = np.mean(criteria_matrix, axis=0)
+            criteria_net_flows = criteria_positive_flows - criteria_negative_flows
+        else:
+            criteria_positive_flows = np.zeros(n_suppliers)
+            criteria_negative_flows = np.zeros(n_suppliers)
+            criteria_net_flows = np.zeros(n_suppliers)
+        
+        criteria_flows[criterion] = {
+            'positive_flows': criteria_positive_flows.tolist(),
+            'negative_flows': criteria_negative_flows.tolist(),
+            'net_flows': criteria_net_flows.tolist()
+        }
+    
     # Create ranking
     ranking_indices = np.argsort(-net_flows)  # Sort by net flow (descending)
     
@@ -290,7 +373,8 @@ def calculate_promethee_ii(supplier_scores: Dict[int, Dict[str, float]],
         'negative_flows': negative_flows.tolist(),
         'net_flows': net_flows.tolist(),
         'ranking': ranking_indices.tolist(),
-        'preference_matrix': preference_matrix.tolist()
+        'preference_matrix': preference_matrix.tolist(),
+        'criteria_flows': criteria_flows
     }
     
     return results
@@ -541,7 +625,6 @@ async def validate_data_completeness(db: SupplierDatabase = Depends(get_db)):
         depots = db.get_depots()
         submissions = db.get_supplier_submissions(status='approved')
         # Skip scores check for now due to potential table corruption
-        # scores = db.get_supplier_scores()
         
         # Check completeness
         missing_data = []
@@ -575,32 +658,6 @@ async def validate_data_completeness(db: SupplierDatabase = Depends(get_db)):
 # SUPPLIER SCORES (from supplier_api.py)
 # ============================================================================
 
-@app.post("/api/suppliers/scores/")
-async def save_supplier_scores(scores: SupplierScores, db: SupplierDatabase = Depends(get_db)):
-    """Save supplier PROMETHEE II scores"""
-    try:
-        criteria_scores_json = json.dumps(scores.criteria_scores)
-        score_id = db.save_supplier_scores(
-            scores.supplier_id,
-            scores.total_score,
-            criteria_scores_json
-        )
-        return {"id": score_id, "message": "Scores saved successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error saving scores: {str(e)}")
-
-@app.get("/api/suppliers/scores/")
-async def get_supplier_scores(db: SupplierDatabase = Depends(get_db)):
-    """Get all supplier scores"""
-    try:
-        scores = db.get_supplier_scores()
-        # Parse JSON criteria scores
-        for score in scores:
-            if score['criteria_scores']:
-                score['criteria_scores'] = json.loads(score['criteria_scores'])
-        return {"scores": scores}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching scores: {str(e)}")
 
 # ============================================================================
 # EXPORT ENDPOINTS (from supplier_api.py)
@@ -651,6 +708,37 @@ async def calculate_bwm_weights_endpoint(request: BWMRequest):
         return {"success": True, "data": result}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"BWM calculation failed: {str(e)}")
+
+@app.post("/api/bwm/save/")
+async def save_bwm_weights_endpoint(request: BWMSaveRequest, db: SupplierDatabase = Depends(get_db)):
+    """Save BWM weights configuration to database"""
+    try:
+        weight_id = db.save_bwm_weights(
+            criteria_names=request.criteria_names,
+            weights=request.weights,
+            best_criterion=request.best_criterion,
+            worst_criterion=request.worst_criterion,
+            best_to_others=request.best_to_others,
+            others_to_worst=request.others_to_worst,
+            consistency_ratio=request.consistency_ratio,
+            consistency_interpretation=request.consistency_interpretation,
+            created_by=request.created_by
+        )
+        return {"success": True, "id": weight_id, "message": "BWM weights saved successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to save BWM weights: {str(e)}")
+
+@app.get("/api/bwm/weights/")
+async def get_latest_bwm_weights_endpoint(db: SupplierDatabase = Depends(get_db)):
+    """Get the latest BWM weights configuration from database"""
+    try:
+        weights = db.get_latest_bwm_weights()
+        if weights:
+            return {"success": True, "data": weights}
+        else:
+            return {"success": True, "data": None, "message": "No BWM weights found"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve BWM weights: {str(e)}")
 
 # ============================================================================
 # Legacy AHP endpoints removed - now using BWM + PROMETHEE II
@@ -975,17 +1063,15 @@ async def get_ranking_analysis(solution_id: int):
 # DEPOT EVALUATION ENDPOINTS (from backend_api.py)
 # ============================================================================
 
-@app.post("/api/depot-evaluations/submit")
-async def submit_depot_evaluation(request: DepotEvaluationRequest):
-    """Submit a single depot evaluation (legacy endpoint - converts to JSON format)"""
+@app.post("/api/supplier-evaluations/submit")
+async def submit_supplier_evaluation(request: SupplierEvaluationRequest):
+    """Submit a single supplier evaluation"""
     try:
-        # Convert single criterion to JSON format for backward compatibility
-        criteria_scores = {request.criterion_name: request.score}
-        
-        evaluation_id = db.submit_depot_evaluation(
-            request.depot_id,
+        # Submit single supplier evaluation
+        evaluation_id = db.submit_supplier_evaluation(
             request.supplier_id,
-            criteria_scores,
+            request.criterion_name,
+            request.score,
             request.manager_name,
             request.manager_email
         )
@@ -993,62 +1079,47 @@ async def submit_depot_evaluation(request: DepotEvaluationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error submitting evaluation: {str(e)}")
 
-@app.post("/api/depot-evaluations/submit-batch")
-async def submit_depot_evaluations_batch(request: DepotEvaluationBatchRequest):
-    """Submit multiple depot evaluations at once"""
+@app.post("/api/supplier-evaluations/submit-batch")
+async def submit_supplier_evaluations_batch(request: SupplierEvaluationBatchRequest):
+    """Submit multiple supplier evaluations at once"""
     try:
-        # Group evaluations by supplier_id to create JSON criteria scores
-        supplier_evaluations = {}
-        
-        for evaluation in request.evaluations:
-            supplier_id = evaluation['supplier_id']
-            if supplier_id not in supplier_evaluations:
-                supplier_evaluations[supplier_id] = {}
-            
-            supplier_evaluations[supplier_id][evaluation['criterion_name']] = evaluation['score']
-        
-        # Submit one evaluation per supplier with all criteria scores
-        evaluation_ids = []
-        for supplier_id, criteria_scores in supplier_evaluations.items():
-            evaluation_id = db.submit_depot_evaluation(
-                request.depot_id,
-                supplier_id,
-                criteria_scores,
-                request.manager_name,
-                request.manager_email
-            )
-            evaluation_ids.append(evaluation_id)
+        # Submit evaluations directly to the new supplier_evaluations table
+        evaluation_ids = db.submit_supplier_evaluations_batch(
+            request.evaluations,
+            request.manager_name,
+            request.manager_email
+        )
         
         return {"evaluation_ids": evaluation_ids, "status": "success", "count": len(evaluation_ids)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error submitting batch evaluations: {str(e)}")
 
-@app.get("/api/depot-evaluations/")
-async def get_depot_evaluations(depot_id: int = None, supplier_id: int = None):
-    """Get depot evaluations with optional filtering"""
+@app.get("/api/supplier-evaluations/")
+async def get_supplier_evaluations(supplier_id: int = None):
+    """Get supplier evaluations with optional filtering"""
     try:
-        evaluations = db.get_depot_evaluations(depot_id, supplier_id)
+        evaluations = db.get_supplier_evaluations(supplier_id)
         return {"evaluations": evaluations}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting evaluations: {str(e)}")
 
-@app.get("/api/depot-evaluations/summary")
+@app.get("/api/supplier-evaluations/summary")
 async def get_evaluation_summary():
-    """Get summary of depot evaluations"""
+    """Get summary of supplier evaluations"""
     try:
         summary = db.get_evaluation_summary()
         return {"summary": summary}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting evaluation summary: {str(e)}")
 
-@app.delete("/api/depot-evaluations/clear")
-async def clear_depot_evaluations():
-    """Clear all depot evaluations"""
+@app.delete("/api/supplier-evaluations/clear")
+async def clear_supplier_evaluations():
+    """Clear all supplier evaluations"""
     try:
-        result = db.clear_depot_evaluations()
+        result = db.clear_supplier_evaluations()
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error clearing depot evaluations: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing supplier evaluations: {str(e)}")
 
 # ============================================================================
 # PROMETHEE II ENDPOINTS (from backend_api.py)
@@ -1111,6 +1182,7 @@ async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
         promethee_results = calculate_promethee_ii(
             supplier_scores,
             criteria_weights,
+            request.preference_functions,
             request.preference_thresholds,
             request.indifference_thresholds
         )
@@ -1158,8 +1230,8 @@ async def get_promethee_results():
 async def update_criteria_configuration(request: CriteriaUpdateRequest):
     """Update criteria names and clear all existing evaluations"""
     try:
-        # Clear all existing depot evaluations
-        clear_result = db.clear_depot_evaluations()
+        # Clear all existing supplier evaluations
+        clear_result = db.clear_supplier_evaluations()
         
         return {
             "message": f"Criteria configuration updated successfully. {clear_result['message']}",
@@ -1173,7 +1245,7 @@ async def update_criteria_configuration(request: CriteriaUpdateRequest):
 async def get_current_criteria():
     """Get current criteria from existing evaluations"""
     try:
-        evaluations = db.get_depot_evaluations()
+        evaluations = db.get_supplier_evaluations()
         if not evaluations:
             return {"criteria_names": [], "total_evaluations": 0}
         

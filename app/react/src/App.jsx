@@ -41,7 +41,7 @@ function App() {
       label: (
         <span>
           <FormOutlined />
-          Depot Manager Survey
+          Survey
         </span>
       ),
       children: <DepotManagerSurvey />
