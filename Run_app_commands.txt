@@ -5,5 +5,26 @@ uvicorn backend_api:app --reload --port 8000
 
 
 
+
+
+
+session storage 
+local storage 
+
+
+sk-9RSfShVAJ3fL0Sl7E3CNzEe49v7GbivIJK6VdvmPmw2zQYbS
+Kimi K2
+
+
+
+
+
 uvicorn unified_api:app --reload --port 8000
 npm run dev
+
+
+cp /tmp/supplier_data_fresh.db /mnt/c/Users/blake/Documents/Thesis_Clean/2025\ Thesis/experiments/bid_demo1/
+
+
+python -m sqlite_web /tmp/supplier_data_fresh.db --host 0.0.0.0 --port 8081
+http://127.0.0.1:8081/

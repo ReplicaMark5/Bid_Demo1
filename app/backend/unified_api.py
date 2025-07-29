@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 import traceback
+import sqlite3
 
 # Add the current directory to sys.path to import the optimizer
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -20,21 +21,32 @@ from best_worst_method import calculate_bwm_weights
 
 app = FastAPI(title="Unified Supply Chain Optimizer API", version="1.0.0")
 
-# Enable CORS
+# Enable CORS with comprehensive origin support
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://127.0.0.1:3000", 
+        "http://localhost:3001", 
+        "http://127.0.0.1:3001",
+        "http://0.0.0.0:3000",
+        "http://0.0.0.0:3001"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 # Global variables to store optimizer instances and results
 optimizer_instances = {}
 optimization_results = {}
 
-# Initialize database
-db = SupplierDatabase()
+# Database path configuration - avoid global database instance
+import os
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+# Use the fresh database that works properly
+DB_PATH = "/tmp/supplier_data_fresh.db"
 
 # GitHub AI integration
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
@@ -45,6 +57,12 @@ model_name = "openai/gpt-4o"
 class SupplierCreate(BaseModel):
     name: str
     email: Optional[str] = None
+    
+    @field_validator('name')
+    def validate_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Supplier name cannot be empty')
+        return v.strip()
 
 class SupplierProfileUpdate(BaseModel):
     company_profile: Optional[str] = None
@@ -128,12 +146,12 @@ class SupplierEvaluationRequest(BaseModel):
     supplier_id: int
     criterion_name: str
     score: float
-    manager_name: Optional[str] = None
-    manager_email: Optional[str] = None
+    participant_name: Optional[str] = None
+    participant_email: Optional[str] = None
 
 class SupplierEvaluationBatchRequest(BaseModel):
-    manager_name: str
-    manager_email: str
+    participant_name: str
+    participant_email: str
     evaluations: List[Dict[str, Any]]  # List of {supplier_id, criterion_name, score}
 
 class PROMETHEECalculationRequest(BaseModel):
@@ -147,6 +165,9 @@ class CriteriaUpdateRequest(BaseModel):
     old_criteria_names: List[str]
     new_criteria_names: List[str]
     default_score: Optional[float] = 5.0
+
+class ProfileScoringConfigRequest(BaseModel):
+    config_data: Dict[str, Dict[str, float]]
 
 class OptimizerInitRequest(BaseModel):
     file_path: str
@@ -182,9 +203,37 @@ class OptimizationResponse(BaseModel):
     ranking_analysis: Optional[Dict[str, Any]] = None
     ranking_reports: Optional[Dict[str, str]] = None
 
-# Dependency to get database instance
+# Dependency to get database instance - creates new instance per request
 def get_db():
-    return db
+    """Create a new database instance for each request to avoid connection sharing"""
+    try:
+        return SupplierDatabase(DB_PATH)
+    except sqlite3.OperationalError as e:
+        if "disk I/O error" in str(e).lower():
+            raise HTTPException(
+                status_code=503, 
+                detail="Database is temporarily unavailable due to file system issues. This may be related to WSL2 limitations. Please try again or contact the administrator."
+            )
+        else:
+            raise HTTPException(status_code=503, detail=f"Database connection error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database initialization error: {str(e)}")
+
+# Helper function for database operations with error handling
+def execute_db_operation(operation_func, *args, **kwargs):
+    """Execute a database operation with proper error handling for lock errors"""
+    try:
+        return operation_func(*args, **kwargs)
+    except sqlite3.OperationalError as e:
+        if "database is locked" in str(e).lower():
+            raise HTTPException(
+                status_code=503, 
+                detail="Database is temporarily busy. Please try again in a moment."
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 # AI scoring function
 async def get_ai_score(description: str, criterion: str) -> int:
@@ -387,6 +436,16 @@ def calculate_promethee_ii(supplier_scores: Dict[int, Dict[str, float]],
 async def root():
     return {"message": "Unified Supply Chain Optimizer API", "version": "1.0.0"}
 
+@app.get("/api/health-simple")
+async def health_check_simple():
+    """Simple health check that doesn't require database access"""
+    return {
+        "status": "healthy",
+        "message": "API is running",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
 # ============================================================================
 # SUPPLIER AND DEPOT MANAGEMENT (from supplier_api.py)
 # ============================================================================
@@ -395,8 +454,13 @@ async def root():
 async def create_supplier(supplier: SupplierCreate, db: SupplierDatabase = Depends(get_db)):
     """Create a new supplier"""
     try:
-        supplier_id = db.add_supplier(supplier.name, supplier.email)
+        supplier_id = execute_db_operation(db.add_supplier, supplier.name, supplier.email)
         return {"id": supplier_id, "message": "Supplier created successfully"}
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions from execute_db_operation
+    except ValueError as e:
+        # Validation errors should return 422
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error creating supplier: {str(e)}")
 
@@ -404,8 +468,10 @@ async def create_supplier(supplier: SupplierCreate, db: SupplierDatabase = Depen
 async def get_suppliers(db: SupplierDatabase = Depends(get_db)):
     """Get all suppliers"""
     try:
-        suppliers = db.get_suppliers()
+        suppliers = execute_db_operation(db.get_suppliers)
         return {"suppliers": suppliers}
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions from execute_db_operation
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching suppliers: {str(e)}")
 
@@ -413,7 +479,8 @@ async def get_suppliers(db: SupplierDatabase = Depends(get_db)):
 async def create_depot(depot: DepotCreate, db: SupplierDatabase = Depends(get_db)):
     """Create a new depot (admin only)"""
     try:
-        depot_id = db.add_depot(
+        depot_id = execute_db_operation(
+            db.add_depot,
             name=depot.name,
             annual_volume=depot.annual_volume,
             country=depot.country,
@@ -433,7 +500,7 @@ async def create_depot(depot: DepotCreate, db: SupplierDatabase = Depends(get_db
 async def get_depots(db: SupplierDatabase = Depends(get_db)):
     """Get all depots"""
     try:
-        depots = db.get_depots()
+        depots = execute_db_operation(db.get_depots)
         return {"depots": depots}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching depots: {str(e)}")
@@ -455,7 +522,8 @@ async def submit_supplier_data(submission: SupplierDataSubmission, db: SupplierD
             'distance_km': submission.distance_km
         }
         
-        submission_id = db.submit_supplier_data(
+        submission_id = execute_db_operation(
+            db.submit_supplier_data,
             submission.supplier_id,
             submission.depot_id,
             data
@@ -474,7 +542,8 @@ async def submit_bulk_supplier_data(bulk_submission: BulkDataSubmission, db: Sup
     try:
         submission_ids = []
         for depot_data in bulk_submission.submissions:
-            submission_id = db.submit_supplier_data(
+            submission_id = execute_db_operation(
+                db.submit_supplier_data,
                 bulk_submission.supplier_id,
                 depot_data['depot_id'],
                 depot_data
@@ -492,7 +561,7 @@ async def submit_bulk_supplier_data(bulk_submission: BulkDataSubmission, db: Sup
 async def get_supplier_submissions(supplier_id: int, db: SupplierDatabase = Depends(get_db)):
     """Get submissions for a specific supplier"""
     try:
-        submissions = db.get_supplier_submissions(supplier_id=supplier_id)
+        submissions = execute_db_operation(db.get_supplier_submissions, supplier_id=supplier_id)
         return {"submissions": submissions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching submissions: {str(e)}")
@@ -501,10 +570,12 @@ async def get_supplier_submissions(supplier_id: int, db: SupplierDatabase = Depe
 async def get_supplier_profile(supplier_id: int, db: SupplierDatabase = Depends(get_db)):
     """Get supplier profile information"""
     try:
-        supplier = db.get_supplier_by_id(supplier_id)
+        supplier = execute_db_operation(db.get_supplier_by_id, supplier_id)
         if not supplier:
             raise HTTPException(status_code=404, detail="Supplier not found")
         return {"supplier": supplier}
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching supplier profile: {str(e)}")
 
@@ -513,13 +584,13 @@ async def update_supplier_profile(supplier_id: int, profile: SupplierProfileUpda
     """Update supplier profile information"""
     try:
         # Check if supplier exists
-        supplier = db.get_supplier_by_id(supplier_id)
+        supplier = execute_db_operation(db.get_supplier_by_id, supplier_id)
         if not supplier:
             raise HTTPException(status_code=404, detail="Supplier not found")
         
         # Update profile
         profile_data = profile.dict(exclude_unset=True)
-        success = db.update_supplier_profile(supplier_id, profile_data)
+        success = execute_db_operation(db.update_supplier_profile, supplier_id, profile_data)
         
         if success:
             return {"message": "Profile updated successfully"}
@@ -536,7 +607,7 @@ async def update_supplier_profile(supplier_id: int, profile: SupplierProfileUpda
 async def get_all_submissions(status: Optional[str] = None, db: SupplierDatabase = Depends(get_db)):
     """Get all submissions (admin only) with optional status filtering"""
     try:
-        submissions = db.get_supplier_submissions(status=status)
+        submissions = execute_db_operation(db.get_supplier_submissions, status=status)
         return {"submissions": submissions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching submissions: {str(e)}")
@@ -545,7 +616,7 @@ async def get_all_submissions(status: Optional[str] = None, db: SupplierDatabase
 async def approve_submission(approval: ApprovalRequest, db: SupplierDatabase = Depends(get_db)):
     """Approve a supplier submission (admin only)"""
     try:
-        success = db.approve_submission(approval.submission_id, approval.approved_by)
+        success = execute_db_operation(db.approve_submission, approval.submission_id, approval.approved_by)
         if success:
             return {"message": "Submission approved successfully"}
         else:
@@ -557,7 +628,7 @@ async def approve_submission(approval: ApprovalRequest, db: SupplierDatabase = D
 async def reject_submission(rejection: ApprovalRequest, db: SupplierDatabase = Depends(get_db)):
     """Reject a supplier submission (admin only)"""
     try:
-        success = db.reject_submission(rejection.submission_id, rejection.approved_by)
+        success = execute_db_operation(db.reject_submission, rejection.submission_id, rejection.approved_by)
         if success:
             return {"message": "Submission rejected successfully"}
         else:
@@ -569,7 +640,7 @@ async def reject_submission(rejection: ApprovalRequest, db: SupplierDatabase = D
 async def get_pending_submissions(db: SupplierDatabase = Depends(get_db)):
     """Get all pending submissions (admin only)"""
     try:
-        submissions = db.get_submissions_by_status('pending')
+        submissions = execute_db_operation(db.get_submissions_by_status, 'pending')
         return submissions
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error fetching pending submissions: {str(e)}")
@@ -578,7 +649,7 @@ async def get_pending_submissions(db: SupplierDatabase = Depends(get_db)):
 async def bulk_approve_supplier_submissions(approval: BulkApprovalRequest, db: SupplierDatabase = Depends(get_db)):
     """Approve all pending submissions for a supplier (admin only)"""
     try:
-        success = db.bulk_approve_supplier_submissions(approval.supplier_id, approval.approved_by)
+        success = execute_db_operation(db.bulk_approve_supplier_submissions, approval.supplier_id, approval.approved_by)
         if success:
             return {"message": "All supplier submissions approved successfully"}
         else:
@@ -590,7 +661,7 @@ async def bulk_approve_supplier_submissions(approval: BulkApprovalRequest, db: S
 async def bulk_reject_supplier_submissions(rejection: BulkApprovalRequest, db: SupplierDatabase = Depends(get_db)):
     """Reject all pending submissions for a supplier (admin only)"""
     try:
-        success = db.bulk_reject_supplier_submissions(rejection.supplier_id, rejection.approved_by)
+        success = execute_db_operation(db.bulk_reject_supplier_submissions, rejection.supplier_id, rejection.approved_by)
         if success:
             return {"message": "All supplier submissions rejected successfully"}
         else:
@@ -603,7 +674,7 @@ async def get_approved_optimization_data(db: SupplierDatabase = Depends(get_db))
     """Get all approved data ready for optimization"""
     try:
         # Get approved submissions with supplier and depot details
-        approved_data = db.get_approved_optimization_data()
+        approved_data = execute_db_operation(db.get_approved_optimization_data)
         return {"approved_data": approved_data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching approved data: {str(e)}")
@@ -612,7 +683,7 @@ async def get_approved_optimization_data(db: SupplierDatabase = Depends(get_db))
 async def cleanup_duplicate_submissions(db: SupplierDatabase = Depends(get_db)):
     """Clean up duplicate supplier-depot submissions (admin only)"""
     try:
-        result = db.cleanup_duplicate_submissions()
+        result = execute_db_operation(db.cleanup_duplicate_submissions)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error cleaning duplicates: {str(e)}")
@@ -621,9 +692,9 @@ async def cleanup_duplicate_submissions(db: SupplierDatabase = Depends(get_db)):
 async def validate_data_completeness(db: SupplierDatabase = Depends(get_db)):
     """Check if all required data is complete for optimization"""
     try:
-        suppliers = db.get_suppliers()
-        depots = db.get_depots()
-        submissions = db.get_supplier_submissions(status='approved')
+        suppliers = execute_db_operation(db.get_suppliers)
+        depots = execute_db_operation(db.get_depots)
+        submissions = execute_db_operation(db.get_supplier_submissions, status='approved')
         # Skip scores check for now due to potential table corruption
         
         # Check completeness
@@ -667,7 +738,7 @@ async def validate_data_completeness(db: SupplierDatabase = Depends(get_db)):
 async def export_optimizer_data(db: SupplierDatabase = Depends(get_db)):
     """Export data in optimizer format (admin only)"""
     try:
-        data = db.export_to_optimizer_format()
+        data = execute_db_operation(db.export_to_optimizer_format)
         return {
             "message": "Data exported successfully",
             "data": {
@@ -683,7 +754,7 @@ async def export_optimizer_data(db: SupplierDatabase = Depends(get_db)):
 async def create_temp_excel(db: SupplierDatabase = Depends(get_db)):
     """Create temporary Excel file for optimizer (admin only)"""
     try:
-        temp_file = db.create_temporary_excel_file()
+        temp_file = execute_db_operation(db.create_temporary_excel_file)
         return {
             "message": "Temporary Excel file created successfully",
             "file_path": temp_file
@@ -713,7 +784,8 @@ async def calculate_bwm_weights_endpoint(request: BWMRequest):
 async def save_bwm_weights_endpoint(request: BWMSaveRequest, db: SupplierDatabase = Depends(get_db)):
     """Save BWM weights configuration to database"""
     try:
-        weight_id = db.save_bwm_weights(
+        weight_id = execute_db_operation(
+            db.save_bwm_weights,
             criteria_names=request.criteria_names,
             weights=request.weights,
             best_criterion=request.best_criterion,
@@ -732,11 +804,13 @@ async def save_bwm_weights_endpoint(request: BWMSaveRequest, db: SupplierDatabas
 async def get_latest_bwm_weights_endpoint(db: SupplierDatabase = Depends(get_db)):
     """Get the latest BWM weights configuration from database"""
     try:
-        weights = db.get_latest_bwm_weights()
+        weights = execute_db_operation(db.get_latest_bwm_weights)
         if weights:
             return {"success": True, "data": weights}
         else:
             return {"success": True, "data": None, "message": "No BWM weights found"}
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions from execute_db_operation
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve BWM weights: {str(e)}")
 
@@ -812,7 +886,8 @@ async def initialize_optimizer_from_db(request: OptimizerInitFromDBRequest):
         np.random.seed(request.random_seed)
         
         # Create temporary Excel file from database
-        temp_file = db.create_temporary_excel_file()
+        db_instance = SupplierDatabase(DB_PATH)
+        temp_file = db_instance.create_temporary_excel_file()
         
         # Initialize optimizer with temporary file
         sheet_names = {
@@ -1064,30 +1139,32 @@ async def get_ranking_analysis(solution_id: int):
 # ============================================================================
 
 @app.post("/api/supplier-evaluations/submit")
-async def submit_supplier_evaluation(request: SupplierEvaluationRequest):
+async def submit_supplier_evaluation(request: SupplierEvaluationRequest, db: SupplierDatabase = Depends(get_db)):
     """Submit a single supplier evaluation"""
     try:
         # Submit single supplier evaluation
-        evaluation_id = db.submit_supplier_evaluation(
+        evaluation_id = execute_db_operation(
+            db.submit_single_supplier_evaluation,
             request.supplier_id,
             request.criterion_name,
             request.score,
-            request.manager_name,
-            request.manager_email
+            request.participant_name,
+            request.participant_email
         )
         return {"evaluation_id": evaluation_id, "status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error submitting evaluation: {str(e)}")
 
 @app.post("/api/supplier-evaluations/submit-batch")
-async def submit_supplier_evaluations_batch(request: SupplierEvaluationBatchRequest):
+async def submit_supplier_evaluations_batch(request: SupplierEvaluationBatchRequest, db: SupplierDatabase = Depends(get_db)):
     """Submit multiple supplier evaluations at once"""
     try:
         # Submit evaluations directly to the new supplier_evaluations table
-        evaluation_ids = db.submit_supplier_evaluations_batch(
+        evaluation_ids = execute_db_operation(
+            db.submit_supplier_evaluations_batch,
             request.evaluations,
-            request.manager_name,
-            request.manager_email
+            request.participant_name,
+            request.participant_email
         )
         
         return {"evaluation_ids": evaluation_ids, "status": "success", "count": len(evaluation_ids)}
@@ -1095,45 +1172,100 @@ async def submit_supplier_evaluations_batch(request: SupplierEvaluationBatchRequ
         raise HTTPException(status_code=500, detail=f"Error submitting batch evaluations: {str(e)}")
 
 @app.get("/api/supplier-evaluations/")
-async def get_supplier_evaluations(supplier_id: int = None):
+async def get_supplier_evaluations(supplier_id: int = None, db: SupplierDatabase = Depends(get_db)):
     """Get supplier evaluations with optional filtering"""
     try:
-        evaluations = db.get_supplier_evaluations(supplier_id)
+        evaluations = execute_db_operation(db.get_supplier_evaluations, supplier_id)
         return {"evaluations": evaluations}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting evaluations: {str(e)}")
 
 @app.get("/api/supplier-evaluations/summary")
-async def get_evaluation_summary():
+async def get_evaluation_summary(db: SupplierDatabase = Depends(get_db)):
     """Get summary of supplier evaluations"""
     try:
-        summary = db.get_evaluation_summary()
+        summary = execute_db_operation(db.get_evaluation_summary)
         return {"summary": summary}
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions from execute_db_operation
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting evaluation summary: {str(e)}")
 
 @app.delete("/api/supplier-evaluations/clear")
-async def clear_supplier_evaluations():
+async def clear_supplier_evaluations(db: SupplierDatabase = Depends(get_db)):
     """Clear all supplier evaluations"""
     try:
-        result = db.clear_supplier_evaluations()
+        result = execute_db_operation(db.clear_supplier_evaluations)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error clearing supplier evaluations: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing evaluations: {str(e)}")
+
+@app.delete("/api/supplier-evaluations/{evaluation_id}")
+async def delete_supplier_evaluation(evaluation_id: int, db: SupplierDatabase = Depends(get_db)):
+    """Delete a specific supplier evaluation"""
+    try:
+        result = execute_db_operation(db.delete_supplier_evaluation, evaluation_id)
+        if not result.get("success", False):
+            raise HTTPException(status_code=404, detail=result.get("message", "Evaluation not found"))
+        return result
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting supplier evaluation: {str(e)}")
+
+# ============================================================================
+# PROFILE SCORING CONFIGURATION ENDPOINTS
+# ============================================================================
+
+@app.post("/api/profile-scoring-config/save")
+async def save_profile_scoring_config(request: ProfileScoringConfigRequest, db: SupplierDatabase = Depends(get_db)):
+    """Save profile scoring configuration to database"""
+    try:
+        result = execute_db_operation(db.save_profile_scoring_config, request.config_data)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving profile scoring config: {str(e)}")
+
+@app.get("/api/profile-scoring-config/")
+async def get_profile_scoring_config(db: SupplierDatabase = Depends(get_db)):
+    """Get profile scoring configuration from database"""
+    try:
+        config = execute_db_operation(db.get_profile_scoring_config)
+        return {"config": config}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting profile scoring config: {str(e)}")
+
+@app.get("/api/suppliers/{supplier_id}/profile-scores")
+async def get_supplier_profile_scores(supplier_id: int, db: SupplierDatabase = Depends(get_db)):
+    """Get calculated profile scores for a specific supplier"""
+    try:
+        scores = execute_db_operation(db.get_supplier_profile_scores, supplier_id)
+        return {"supplier_id": supplier_id, "profile_scores": scores}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting supplier profile scores: {str(e)}")
 
 # ============================================================================
 # PROMETHEE II ENDPOINTS (from backend_api.py)
 # ============================================================================
 
 @app.post("/api/promethee/calculate")
-async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
+async def calculate_promethee_ranking(request: PROMETHEECalculationRequest, db: SupplierDatabase = Depends(get_db)):
     """Calculate PROMETHEE II ranking for suppliers"""
     try:
-        # Get aggregated supplier scores from database
-        aggregated_scores = db.get_aggregated_supplier_scores(request.criteria_names)
+        # Ensure unified scores table is populated before calculation
+        migration_result = execute_db_operation(db.ensure_unified_scores_populated, request.criteria_names)
+        
+        # Get aggregated supplier scores from unified table
+        aggregated_scores = execute_db_operation(db.get_unified_supplier_scores, request.criteria_names)
         
         # Get manager evaluation counts per supplier
-        evaluation_counts = db.get_supplier_evaluation_counts()
+        evaluation_counts = execute_db_operation(db.get_supplier_evaluation_counts)
+        
+        # Define which criteria are profile-based (must have data) vs survey-based (can have missing data)
+        PROFILE_CRITERIA = {
+            'Product/Service Type', 'Geographical Network', 'Method of Sourcing',
+            'Investment in Equipment', 'Reciprocal Business', 'B-BBEE Level'
+        }
         
         # Convert to format expected by PROMETHEE calculation
         supplier_scores = {}
@@ -1147,18 +1279,35 @@ async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
             for criterion_name in request.criteria_names:
                 if criterion_name in criteria_data:
                     supplier_scores[supplier_id][criterion_name] = criteria_data[criterion_name]['score']
-                    confidence_levels[supplier_id].append(criteria_data[criterion_name]['confidence'])
+                    
+                    # Calculate confidence based on data source and count
+                    data_source = criteria_data[criterion_name].get('source', 'unknown')
+                    count = criteria_data[criterion_name].get('count', 1)
+                    
+                    if data_source == 'profile':
+                        confidence = 1.0  # Profile data is always fully confident
+                    elif data_source == 'survey':
+                        confidence = min(1.0, count / 3.0)  # More evaluations = higher confidence, max at 3
+                    else:
+                        confidence = 0.5  # Default/unknown sources get medium confidence
+                    
+                    confidence_levels[supplier_id].append(confidence)
                 else:
-                    # Track missing evaluations instead of using default scores
-                    missing_evaluations.append({
-                        'supplier_id': supplier_id,
-                        'criterion_name': criterion_name
-                    })
+                    # Only consider it "missing" if it's a profile criterion that should always have data
+                    if criterion_name in PROFILE_CRITERIA:
+                        missing_evaluations.append({
+                            'supplier_id': supplier_id,
+                            'criterion_name': criterion_name
+                        })
+                    else:
+                        # For survey criteria without data, use default score of 0
+                        supplier_scores[supplier_id][criterion_name] = 0.0
+                        confidence_levels[supplier_id].append(0)  # Zero confidence for missing survey data
         
-        # Check if there are any missing evaluations
+        # Check if there are any missing profile evaluations (this should not happen with proper profile integration)
         if missing_evaluations:
             # Get supplier names for better error messages
-            suppliers_data = db.get_suppliers()
+            suppliers_data = execute_db_operation(db.get_suppliers)
             supplier_names = {s['id']: s['name'] for s in suppliers_data}
             
             missing_details = []
@@ -1167,16 +1316,22 @@ async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
                 missing_details.append(f"- {supplier_name}: {missing['criterion_name']}")
             
             error_message = (
-                f"⚠️ PROMETHEE II calculation cannot proceed with missing evaluations.\n\n"
-                f"Missing evaluations ({len(missing_evaluations)} total):\n" +
+                f"⚠️ PROMETHEE II calculation cannot proceed with missing profile criteria data.\n\n"
+                f"Missing profile data ({len(missing_evaluations)} total):\n" +
                 "\n".join(missing_details) +
-                f"\n\nPlease ensure all suppliers have been evaluated on all criteria before running PROMETHEE II analysis."
+                f"\n\nProfile criteria should always have data from supplier profiles. Please check the supplier data and profile scoring configuration."
             )
             
             raise HTTPException(status_code=400, detail=error_message)
         
         # Convert criteria weights to dict
         criteria_weights = dict(zip(request.criteria_names, request.criteria_weights))
+        
+        # Debug: Print supplier scores being passed to PROMETHEE II
+        print("\n=== DEBUG: PROMETHEE II Input Data ===")
+        for supplier_id, scores in supplier_scores.items():
+            print(f"Supplier {supplier_id}: {scores}")
+        print("=========================================\n")
         
         # Calculate PROMETHEE II ranking
         promethee_results = calculate_promethee_ii(
@@ -1191,7 +1346,8 @@ async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
         suppliers = promethee_results['suppliers']
         for i, supplier_id in enumerate(suppliers):
             avg_confidence = np.mean(confidence_levels[supplier_id])
-            db.save_promethee_results(
+            execute_db_operation(
+                db.save_promethee_results,
                 supplier_id,
                 promethee_results['positive_flows'][i],
                 promethee_results['negative_flows'][i],
@@ -1203,8 +1359,8 @@ async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
         
         # Add supplier names and confidence levels to results
         supplier_names = []
+        supplier_data = execute_db_operation(db.get_suppliers)
         for supplier_id in suppliers:
-            supplier_data = db.get_suppliers()
             supplier_name = next((s['name'] for s in supplier_data if s['id'] == supplier_id), f"Supplier {supplier_id}")
             supplier_names.append(supplier_name)
         
@@ -1218,20 +1374,41 @@ async def calculate_promethee_ranking(request: PROMETHEECalculationRequest):
         raise HTTPException(status_code=500, detail=f"Error calculating PROMETHEE ranking: {str(e)}")
 
 @app.get("/api/promethee/results")
-async def get_promethee_results():
+async def get_promethee_results(db: SupplierDatabase = Depends(get_db)):
     """Get latest PROMETHEE II results"""
     try:
-        results = db.get_promethee_results()
+        results = execute_db_operation(db.get_promethee_results)
         return {"results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting PROMETHEE results: {str(e)}")
 
+@app.post("/api/promethee/threshold-recommendations")
+async def get_threshold_recommendations(request: PROMETHEECalculationRequest, db: SupplierDatabase = Depends(get_db)):
+    """Get intelligent threshold recommendations based on actual data distributions"""
+    try:
+        # Ensure unified scores table is populated before generating recommendations
+        migration_result = execute_db_operation(db.ensure_unified_scores_populated, request.criteria_names)
+        
+        recommendations = execute_db_operation(db.calculate_threshold_recommendations, request.criteria_names)
+        return {"success": True, "recommendations": recommendations}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error calculating threshold recommendations: {str(e)}")
+
+@app.post("/api/promethee/threshold-alternatives")  
+async def get_threshold_alternatives(request: PROMETHEECalculationRequest, db: SupplierDatabase = Depends(get_db)):
+    """Get alternative threshold recommendation strategies (conservative, sensitive, etc.)"""
+    try:
+        alternatives = execute_db_operation(db.get_threshold_recommendation_alternatives, request.criteria_names)
+        return {"success": True, "alternatives": alternatives}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error calculating threshold alternatives: {str(e)}")
+
 @app.post("/api/criteria/update")
-async def update_criteria_configuration(request: CriteriaUpdateRequest):
+async def update_criteria_configuration(request: CriteriaUpdateRequest, db: SupplierDatabase = Depends(get_db)):
     """Update criteria names and clear all existing evaluations"""
     try:
         # Clear all existing supplier evaluations
-        clear_result = db.clear_supplier_evaluations()
+        clear_result = execute_db_operation(db.clear_supplier_evaluations)
         
         return {
             "message": f"Criteria configuration updated successfully. {clear_result['message']}",
@@ -1242,10 +1419,10 @@ async def update_criteria_configuration(request: CriteriaUpdateRequest):
         raise HTTPException(status_code=500, detail=f"Error updating criteria configuration: {str(e)}")
 
 @app.get("/api/criteria/current")
-async def get_current_criteria():
+async def get_current_criteria(db: SupplierDatabase = Depends(get_db)):
     """Get current criteria from existing evaluations"""
     try:
-        evaluations = db.get_supplier_evaluations()
+        evaluations = execute_db_operation(db.get_supplier_evaluations)
         if not evaluations:
             return {"criteria_names": [], "total_evaluations": 0}
         
@@ -1264,6 +1441,15 @@ async def get_current_criteria():
 # ============================================================================
 # HEALTH CHECK
 # ============================================================================
+
+@app.post("/api/promethee/migrate-unified-scores")
+async def migrate_unified_scores(request: PROMETHEECalculationRequest, db: SupplierDatabase = Depends(get_db)):
+    """Migrate existing data to unified supplier criteria scores table"""
+    try:
+        result = execute_db_operation(db.migrate_to_unified_criteria_scores, request.criteria_names)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error migrating to unified scores: {str(e)}")
 
 @app.get("/api/health")
 async def health_check():

@@ -47,7 +47,7 @@ const AdminSupplierManagement = () => {
   const [depots, setDepots] = useState([])
   const [submissions, setSubmissions] = useState([])
   const [approvedData, setApprovedData] = useState([])
-  const [depotEvaluations, setDepotEvaluations] = useState([])
+  const [supplierEvaluations, setSupplierEvaluations] = useState([])
   const [loading, setLoading] = useState(false)
   const [validationData, setValidationData] = useState(null)
   const [detailsModal, setDetailsModal] = useState({ visible: false, submission: null })
@@ -57,9 +57,13 @@ const AdminSupplierManagement = () => {
     pendingConfig: null 
   })
   const [bwmConfig, setBwmConfig] = useState({ 
-    numCriteria: 3, 
-    criteriaNames: ['Criteria 1', 'Criteria 2', 'Criteria 3'],
-    criteriaWeights: [1.0, 1.0, 1.0],
+    numCriteria: 9, // Profile + Survey criteria combined
+    criteriaNames: [
+      'Product/Service Type', 'Geographical Network', 'Method of Sourcing',
+      'Investment in Equipment', 'Reciprocal Business', 'B-BBEE Level',
+      'Survey Criteria 1', 'Survey Criteria 2', 'Survey Criteria 3'
+    ],
+    criteriaWeights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
     supplierNames: [],
     bestCriterion: null,
     worstCriterion: null,
@@ -69,6 +73,41 @@ const AdminSupplierManagement = () => {
   })
   const [newSupplierForm] = Form.useForm()
   const [newDepotForm] = Form.useForm()
+  const [isShowingModal, setIsShowingModal] = useState(false)
+  
+  // Profile scoring configuration state
+  const [profileScoringConfig, setProfileScoringConfig] = useState({
+    product_service_type: {
+      'Both': 15,
+      'Only Depot': 13,
+      'Only On-road': 2
+    },
+    geographical_network: {
+      'Both': 15,
+      'Only RSA': 12,
+      'Only SADC': 3
+    },
+    method_of_sourcing: {
+      'Direct Import and Refined Locally': 15,
+      'Direct Import or Refined Locally': 10,
+      'Trade/Resell only': 0
+    },
+    invest_in_refuelling_equipment: {
+      'Yes': 10,
+      'No': 0
+    },
+    reciprocal_business: {
+      'Yes': 25,
+      'No': 0
+    },
+    bbee_level: {
+      'Level 1': 20,
+      'Level 2': 15,
+      'Level 3': 10,
+      'Level 4': 5,
+      'Level 5+': 0
+    }
+  })
 
   useEffect(() => {
     fetchSubmissions()
@@ -77,6 +116,7 @@ const AdminSupplierManagement = () => {
     fetchValidationData()
     fetchApprovedData()
     fetchSupplierEvaluations()
+    fetchProfileScoringConfig()
     
     // Load BWM config from localStorage
     const savedConfig = localStorage.getItem('bwmConfig')
@@ -98,6 +138,8 @@ const AdminSupplierManagement = () => {
       // Don't override supplierNames from localStorage - we'll populate from database
       setBwmConfig(config)
     }
+    
+    // Profile scoring config is now loaded via fetchProfileScoringConfig()
     
   }, [])
 
@@ -182,9 +224,62 @@ const AdminSupplierManagement = () => {
     try {
       const response = await fetch('http://localhost:8000/api/supplier-evaluations/')
       const data = await response.json()
-      setDepotEvaluations(data.evaluations || [])
+      setSupplierEvaluations(data.evaluations || [])
     } catch (error) {
       console.error('Error fetching supplier evaluations:', error)
+    }
+  }
+
+  const fetchProfileScoringConfig = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/profile-scoring-config/')
+      const data = await response.json()
+      if (data.config && Object.keys(data.config).length > 0) {
+        setProfileScoringConfig(prevConfig => ({
+          ...prevConfig,
+          ...data.config
+        }))
+        // Also save to localStorage as backup
+        localStorage.setItem('profileScoringConfig', JSON.stringify(data.config))
+      }
+    } catch (error) {
+      console.error('Error fetching profile scoring config:', error)
+      // Fallback to localStorage if database fails
+      const savedProfileConfig = localStorage.getItem('profileScoringConfig')
+      if (savedProfileConfig) {
+        try {
+          const profileConfig = JSON.parse(savedProfileConfig)
+          // Ensure we have a valid object with expected structure
+          if (profileConfig && typeof profileConfig === 'object') {
+            setProfileScoringConfig(prevConfig => ({
+              ...prevConfig,
+              ...profileConfig
+            }))
+          }
+        } catch (error) {
+          console.error('Error parsing saved profile config:', error)
+          // Keep the default configuration if parsing fails
+        }
+      }
+    }
+  }
+
+  const handleDeleteEvaluation = async (evaluationId) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/supplier-evaluations/${evaluationId}`, {
+        method: 'DELETE'
+      })
+      
+      if (response.ok) {
+        message.success('Supplier evaluation deleted successfully')
+        fetchSupplierEvaluations() // Refresh the list
+      } else {
+        const error = await response.json()
+        message.error(error.detail || 'Failed to delete evaluation')
+      }
+    } catch (error) {
+      console.error('Error deleting evaluation:', error)
+      message.error('Error deleting evaluation')
     }
   }
 
@@ -898,55 +993,116 @@ const AdminSupplierManagement = () => {
     )
   }
 
-  const DepotEvaluations = () => {
-    const columns = [
-      {
-        title: 'Depot',
-        dataIndex: 'depot_name',
-        key: 'depot_name',
-        sorter: (a, b) => a.depot_name.localeCompare(b.depot_name),
-      },
+  const SupplierEvaluations = () => {
+    const expandedRowRender = (record) => {
+      const criteriaColumns = [
+        {
+          title: 'Criterion',
+          dataIndex: 'criterion',
+          key: 'criterion',
+          width: 200,
+        },
+        {
+          title: 'Score',
+          dataIndex: 'score',
+          key: 'score',
+          width: 100,
+          render: (value) => (
+            <Tag color={value >= 7 ? 'green' : value >= 5 ? 'orange' : 'red'}>
+              {value.toFixed(1)}
+            </Tag>
+          ),
+        }
+      ]
+
+      const criteriaData = Object.entries(record.criteria_scores).map(([criterion, score]) => ({
+        key: criterion,
+        criterion,
+        score: parseFloat(score)
+      }))
+
+      return (
+        <div style={{ padding: '16px', backgroundColor: '#fafafa' }}>
+          <Table
+            columns={criteriaColumns}
+            dataSource={criteriaData}
+            pagination={false}
+            size="small"
+            scroll={{ x: 300 }}
+          />
+        </div>
+      )
+    }
+
+    const mainColumns = [
       {
         title: 'Supplier',
         dataIndex: 'supplier_name',
         key: 'supplier_name',
+        width: 200,
         sorter: (a, b) => a.supplier_name.localeCompare(b.supplier_name),
       },
       {
-        title: 'Criterion',
-        dataIndex: 'criterion_name',
-        key: 'criterion_name',
-        sorter: (a, b) => a.criterion_name.localeCompare(b.criterion_name),
-      },
-      {
-        title: 'Score',
-        dataIndex: 'score',
-        key: 'score',
-        render: (value) => (
-          <Tag color={value >= 7 ? 'green' : value >= 5 ? 'orange' : 'red'}>
-            {value.toFixed(1)}
-          </Tag>
+        title: 'Participant',
+        dataIndex: 'participant_name',
+        key: 'participant_name',
+        width: 250,
+        render: (value, record) => (
+          <div>
+            <div>{value || 'N/A'}</div>
+            {record.participant_email && (
+              <div style={{ fontSize: '12px', color: '#666' }}>
+                {record.participant_email}
+              </div>
+            )}
+          </div>
         ),
-        sorter: (a, b) => a.score - b.score,
       },
       {
-        title: 'Manager',
-        dataIndex: 'manager_name',
-        key: 'manager_name',
-        render: (value) => value || 'N/A',
+        title: 'Criteria Count',
+        width: 120,
+        render: (_, record) => (
+          <div style={{ textAlign: 'center' }}>
+            <Badge count={Object.keys(record.criteria_scores).length} style={{ backgroundColor: '#1890ff' }} />
+            <div style={{ fontSize: '12px', color: '#666', marginTop: 4 }}>
+              {Object.keys(record.criteria_scores).length} criteria
+            </div>
+          </div>
+        ),
       },
       {
         title: 'Submitted',
         dataIndex: 'submitted_at',
         key: 'submitted_at',
-        render: (value) => new Date(value).toLocaleDateString(),
+        width: 150,
+        render: (value) => (
+          <div>
+            <div>{new Date(value).toLocaleDateString()}</div>
+            <div style={{ fontSize: '12px', color: '#666' }}>
+              {new Date(value).toLocaleTimeString()}
+            </div>
+          </div>
+        ),
         sorter: (a, b) => new Date(a.submitted_at) - new Date(b.submitted_at),
+      },
+      {
+        width: 80,
+        render: (_, record) => (
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <Button
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              onClick={() => handleDeleteEvaluation(record.id)}
+            />
+          </div>
+        ),
       }
     ]
 
     return (
       <Card 
-        title="Depot Manager Evaluations" 
+        title="Supplier Evaluations" 
         extra={
           <div>
             <Button
@@ -964,11 +1120,11 @@ const AdminSupplierManagement = () => {
               icon={<DeleteOutlined />}
               onClick={() => {
                 Modal.confirm({
-                  title: 'Clear All Depot Evaluations',
+                  title: 'Clear All Supplier Evaluations',
                   content: (
                     <div>
-                      <p>⚠️ <strong>This will permanently delete all depot evaluations!</strong></p>
-                      <p>This action cannot be undone. All supplier scoring data from depot managers will be lost.</p>
+                      <p>⚠️ <strong>This will permanently delete all supplier evaluations!</strong></p>
+                      <p>This action cannot be undone. All supplier scoring data from participants will be lost.</p>
                       <p>Are you sure you want to proceed?</p>
                     </div>
                   ),
@@ -990,20 +1146,34 @@ const AdminSupplierManagement = () => {
         }
       >
         <Alert
-          message={`${depotEvaluations.length} depot evaluations submitted for PROMETHEE II analysis`}
+          message={`${supplierEvaluations.length} supplier evaluations submitted for PROMETHEE II analysis`}
           type="info"
           style={{ marginBottom: 16 }}
           showIcon
         />
         <Table
-          columns={columns}
-          dataSource={depotEvaluations}
-          rowKey={(record) => `eval-${record.depot_id}-${record.supplier_id}-${record.criterion_name}`}
+          columns={mainColumns}
+          dataSource={supplierEvaluations}
+          rowKey={(record) => `eval-${record.id}-${record.supplier_id}`}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
             showQuickJumper: true,
             showTotal: (total) => `Total ${total} evaluations`
+          }}
+          expandable={{
+            expandedRowRender,
+            rowExpandable: (record) => Object.keys(record.criteria_scores).length > 0,
+            expandIcon: ({ expanded, onExpand, record }) => (
+              <Button
+                type="text"
+                size="small"
+                icon={expanded ? <CloseOutlined /> : <EyeOutlined />}
+                onClick={(e) => onExpand(record, e)}
+              >
+                {expanded ? 'Hide' : 'View'} Criteria
+              </Button>
+            ),
           }}
           scroll={{ x: 800 }}
           size="small"
@@ -1080,20 +1250,33 @@ const AdminSupplierManagement = () => {
   }
 
   const BWMConfiguration = () => {
-    // Removed excessive logging to reduce console noise
+    // Generate combined criteria list (profile + survey)
+    const getProfileCriteria = () => [
+      'Product/Service Type', 'Geographical Network', 'Method of Sourcing',
+      'Investment in Equipment', 'Reciprocal Business', 'B-BBEE Level'
+    ]
+    
+    const getSurveyCriteria = () => {
+      // Get survey criteria from BWM config or use defaults
+      const surveyCriteriaCount = Math.max(3, bwmConfig.numCriteria - 6) // At least 3 survey criteria
+      return Array(surveyCriteriaCount).fill('').map((_, i) => `Survey Criteria ${i + 1}`)
+    }
+    
+    const getCombinedCriteria = () => {
+      return [...getProfileCriteria(), ...getSurveyCriteria()]
+    }
     
     // Temporary state for form inputs
     const [tempConfig, setTempConfig] = useState({
-      numCriteria: bwmConfig.numCriteria
+      numCriteria: getCombinedCriteria().length
     })
-    const [tempCriteriaNames, setTempCriteriaNames] = useState([...bwmConfig.criteriaNames])
+    const [tempCriteriaNames, setTempCriteriaNames] = useState(getCombinedCriteria())
     const [tempBestCriterion, setTempBestCriterion] = useState(bwmConfig.bestCriterion)
     const [tempWorstCriterion, setTempWorstCriterion] = useState(bwmConfig.worstCriterion)
     const [tempBestToOthers, setTempBestToOthers] = useState({...bwmConfig.bestToOthers})
     const [tempOthersToWorst, setTempOthersToWorst] = useState({...bwmConfig.othersToWorst})
     const [bwmLoading, setBwmLoading] = useState(false)
     const [savedBwmWeights, setSavedBwmWeights] = useState(null)
-    const [isShowingModal, setIsShowingModal] = useState(false)
     
     
     // Update temp state when bwmConfig changes (but not when warning modal is showing)
@@ -1161,15 +1344,21 @@ const AdminSupplierManagement = () => {
       // Set flag to prevent state resets
       setIsShowingModal(true)
       
-      // Show warning modal with pending configuration
-      // Preserve existing criteria names and only add new ones if increasing
-      const newNames = Array(tempConfig.numCriteria).fill('').map((_, i) => {
-        if (i < tempCriteriaNames.length && tempCriteriaNames[i]) {
-          return tempCriteriaNames[i] // Keep existing name
+      // Generate combined criteria names (profile + survey)
+      const profileCriteria = getProfileCriteria()
+      const surveyCriteriaCount = tempConfig.numCriteria - 6
+      const surveyCriteria = Array(surveyCriteriaCount).fill('').map((_, i) => {
+        // Keep existing survey criteria names if they exist
+        const existingIndex = i + 6
+        if (existingIndex < tempCriteriaNames.length && tempCriteriaNames[existingIndex]) {
+          return tempCriteriaNames[existingIndex]
         } else {
-          return `Criteria ${i + 1}` // Add default name for new criteria
+          return `Survey Criteria ${i + 1}`
         }
       })
+      
+      const newNames = [...profileCriteria, ...surveyCriteria]
+      
       const pendingConfig = {
         numCriteria: tempConfig.numCriteria,
         criteriaNames: newNames
@@ -1336,50 +1525,283 @@ const AdminSupplierManagement = () => {
     }
     
     
+    const ProfileScoringConfiguration = () => {
+      const updateProfileScore = (criteriaType, option, value) => {
+        setProfileScoringConfig(prev => ({
+          ...prev,
+          [criteriaType]: {
+            ...(prev[criteriaType] || {}),
+            [option]: parseFloat(value) || 0
+          }
+        }))
+      }
+
+      const saveProfileScoringConfig = async () => {
+        try {
+          const response = await fetch('http://localhost:8000/api/profile-scoring-config/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              config_data: profileScoringConfig
+            })
+          })
+
+          if (response.ok) {
+            const result = await response.json()
+            // Also save to localStorage as backup
+            localStorage.setItem('profileScoringConfig', JSON.stringify(profileScoringConfig))
+            message.success(result.message || 'Profile scoring configuration saved successfully!')
+          } else {
+            const error = await response.json()
+            message.error(error.detail || 'Failed to save profile scoring configuration')
+          }
+        } catch (error) {
+          console.error('Error saving profile scoring config:', error)
+          message.error('Error saving profile scoring configuration')
+        }
+      }
+
+      return (
+        <Card title="Profile Criteria Scoring Configuration" extra={<SettingOutlined />}>
+          <Alert
+            message="Configure Scoring Rules"
+            description="Set the scores for each possible response option in supplier profiles. These will be used alongside survey data in PROMETHEE II analysis."
+            type="info"
+            showIcon
+            style={{ marginBottom: 24 }}
+          />
+          
+          <Row gutter={[24, 24]}>
+            {/* Product/Service Type */}
+            <Col span={12}>
+              <Card size="small" title="Product / Service Type" style={{ height: '100%' }}>
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  {Object.entries(profileScoringConfig.product_service_type || {}).map(([option, score]) => (
+                    <div key={option} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={{ minWidth: '120px' }}>{option}:</Text>
+                      <InputNumber
+                        size="small"
+                        value={score}
+                        onChange={(value) => updateProfileScore('product_service_type', option, value)}
+                        min={0}
+                        max={100}
+                        style={{ width: '80px' }}
+                        addonAfter="%"
+                      />
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+
+            {/* Geographical Network */}
+            <Col span={12}>
+              <Card size="small" title="Geographical Network" style={{ height: '100%' }}>
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  {Object.entries(profileScoringConfig.geographical_network || {}).map(([option, score]) => (
+                    <div key={option} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={{ minWidth: '120px' }}>{option}:</Text>
+                      <InputNumber
+                        size="small"
+                        value={score}
+                        onChange={(value) => updateProfileScore('geographical_network', option, value)}
+                        min={0}
+                        max={100}
+                        style={{ width: '80px' }}
+                        addonAfter="%"
+                      />
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+
+            {/* Method of Sourcing */}
+            <Col span={12}>
+              <Card size="small" title="Method of Sourcing" style={{ height: '100%' }}>
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  {Object.entries(profileScoringConfig.method_of_sourcing || {}).map(([option, score]) => (
+                    <div key={option} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={{ minWidth: '160px', fontSize: '12px' }}>{option}:</Text>
+                      <InputNumber
+                        size="small"
+                        value={score}
+                        onChange={(value) => updateProfileScore('method_of_sourcing', option, value)}
+                        min={0}
+                        max={100}
+                        style={{ width: '80px' }}
+                        addonAfter="%"
+                      />
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+
+            {/* Invest in Refuelling Equipment */}
+            <Col span={12}>
+              <Card size="small" title="Invest in Refuelling Equipment" style={{ height: '100%' }}>
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  {Object.entries(profileScoringConfig.invest_in_refuelling_equipment || {}).map(([option, score]) => (
+                    <div key={option} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={{ minWidth: '120px' }}>{option}:</Text>
+                      <InputNumber
+                        size="small"
+                        value={score}
+                        onChange={(value) => updateProfileScore('invest_in_refuelling_equipment', option, value)}
+                        min={0}
+                        max={100}
+                        style={{ width: '80px' }}
+                        addonAfter="%"
+                      />
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+
+            {/* Reciprocal Business */}
+            <Col span={12}>
+              <Card size="small" title="Reciprocal Business" style={{ height: '100%' }}>
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  {Object.entries(profileScoringConfig.reciprocal_business || {}).map(([option, score]) => (
+                    <div key={option} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={{ minWidth: '120px' }}>{option}:</Text>
+                      <InputNumber
+                        size="small"
+                        value={score}
+                        onChange={(value) => updateProfileScore('reciprocal_business', option, value)}
+                        min={0}
+                        max={100}
+                        style={{ width: '80px' }}
+                        addonAfter="%"
+                      />
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+
+            {/* B-BBEE Level */}
+            <Col span={12}>
+              <Card size="small" title="B-BBEE Level" style={{ height: '100%' }}>
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  {Object.entries(profileScoringConfig.bbee_level || {}).map(([option, score]) => (
+                    <div key={option} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={{ minWidth: '120px' }}>{option}:</Text>
+                      <InputNumber
+                        size="small"
+                        value={score}
+                        onChange={(value) => updateProfileScore('bbee_level', option, value)}
+                        min={0}
+                        max={100}
+                        style={{ width: '80px' }}
+                        addonAfter="%"
+                      />
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+          </Row>
+
+          <div style={{ marginTop: '24px', textAlign: 'center' }}>
+            <Button type="primary" onClick={saveProfileScoringConfig} icon={<SettingOutlined />}>
+              Save Profile Scoring Configuration
+            </Button>
+          </div>
+        </Card>
+      )
+    }
+    
     return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Card title="Step 1: Basic Configuration" extra={<SettingOutlined />}>
+      <ProfileScoringConfiguration />
+      
+      <Card title="Step 1: Combined Criteria Configuration" extra={<SettingOutlined />}>
+        <Alert
+          message="Combined Criteria Structure"
+          description="BWM will calculate weights for both profile criteria (based on supplier profiles) and survey criteria (based on participant evaluations). Profile criteria are automatically included."
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <div>
-            <Text strong>Number of Criteria:</Text>
+            <Text strong>Profile Criteria (Fixed):</Text>
+            <div style={{ marginLeft: '20px', marginTop: '8px' }}>
+              {getProfileCriteria().map((criteria, index) => (
+                <Tag key={index} color="blue" style={{ margin: '2px' }}>
+                  {criteria}
+                </Tag>
+              ))}
+            </div>
+          </div>
+          <div>
+            <Text strong>Number of Survey Criteria:</Text>
             <InputNumber
-              min={2}
-              max={10}
-              value={tempConfig.numCriteria}
-              onChange={(value) => setTempConfig({ ...tempConfig, numCriteria: value })}
+              min={3}
+              max={8}
+              value={tempConfig.numCriteria - 6}
+              onChange={(value) => setTempConfig({ ...tempConfig, numCriteria: value + 6 })}
               style={{ marginLeft: '10px' }}
             />
+            <Text type="secondary" style={{ marginLeft: '10px' }}>
+              Total Criteria: {tempConfig.numCriteria} (6 Profile + {tempConfig.numCriteria - 6} Survey)
+            </Text>
           </div>
           <Button type="primary" onClick={updateBasicConfig}>
-            Update Basic Configuration
+            Update Criteria Configuration
           </Button>
         </Space>
       </Card>
 
       <Card title="Step 2: Criteria Names" extra={<EditOutlined />}>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            message="Profile Criteria Names are Fixed"
+            description="Profile criteria names cannot be changed as they correspond to supplier profile fields. Only survey criteria names can be customized."
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+          
           <div>
-            <Text strong>Criteria Names:</Text>
-            <div style={{ marginTop: '10px' }}>
-              {tempCriteriaNames.map((name, index) => (
+            <Text strong>Profile Criteria (Fixed):</Text>
+            <div style={{ marginTop: '10px', marginLeft: '20px' }}>
+              {getProfileCriteria().map((name, index) => (
                 <div key={index} style={{ marginBottom: '8px' }}>
-                  <Text>{`Criteria ${index + 1}:`}</Text>
+                  <Tag color="blue" style={{ padding: '4px 8px' }}>
+                    {index + 1}. {name}
+                  </Tag>
+                </div>
+              ))}
+            </div>
+          </div>
+          
+          <div>
+            <Text strong>Survey Criteria Names (Editable):</Text>
+            <div style={{ marginTop: '10px' }}>
+              {tempCriteriaNames.slice(6).map((name, index) => (
+                <div key={index + 6} style={{ marginBottom: '8px' }}>
+                  <Text>{`Survey ${index + 1}:`}</Text>
                   <Input
                     value={name}
                     onChange={(e) => {
                       const newNames = [...tempCriteriaNames]
-                      newNames[index] = e.target.value
+                      newNames[index + 6] = e.target.value
                       setTempCriteriaNames(newNames)
                     }}
-                    placeholder={`Enter name for criteria ${index + 1}`}
+                    placeholder={`Enter name for survey criteria ${index + 1}`}
                     style={{ marginLeft: '10px', width: '300px' }}
                   />
                 </div>
               ))}
             </div>
           </div>
+          
           <Button type="primary" onClick={updateCriteriaNamesInternal}>
-            Update Criteria Names
+            Update Survey Criteria Names
           </Button>
         </Space>
       </Card>
@@ -1388,10 +1810,32 @@ const AdminSupplierManagement = () => {
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Alert
             message="Best-Worst Method Instructions"
-            description="BWM requires fewer comparisons than AHP. Select the most important (best) and least important (worst) criteria, then compare them with others using a 1-9 scale."
+            description="BWM will calculate weights for ALL criteria (both profile and survey). Select the most important (best) and least important (worst) criteria from the complete list, then compare them with others using a 1-9 scale."
             type="info"
             showIcon
           />
+          
+          <div style={{ marginBottom: '16px' }}>
+            <Text strong>Complete Criteria List for BWM:</Text>
+            <div style={{ marginTop: '8px', marginLeft: '20px' }}>
+              <Text type="secondary">Profile Criteria:</Text>
+              <div style={{ marginBottom: '8px' }}>
+                {getProfileCriteria().map((criteria, index) => (
+                  <Tag key={index} color="blue" style={{ margin: '2px' }}>
+                    {criteria}
+                  </Tag>
+                ))}
+              </div>
+              <Text type="secondary">Survey Criteria:</Text>
+              <div>
+                {tempCriteriaNames.slice(6).map((criteria, index) => (
+                  <Tag key={index + 6} color="green" style={{ margin: '2px' }}>
+                    {criteria}
+                  </Tag>
+                ))}
+              </div>
+            </div>
+          </div>
           
           <Row gutter={16}>
             <Col span={12}>
@@ -1528,6 +1972,225 @@ const AdminSupplierManagement = () => {
     )
   }
 
+  const SupplierProfiles = () => {
+    const expandedRowRender = (record) => {
+      return (
+        <div style={{ padding: '16px', backgroundColor: '#fafafa' }}>
+          <Card size="small" title={`${record.name} - Complete Profile Information`}>
+            <Row gutter={[16, 16]}>
+              {/* Company Information Section */}
+              <Col span={8}>
+                <div style={{ marginBottom: '16px' }}>
+                  <Title level={5} style={{ margin: '0 0 12px 0', color: '#1890ff' }}>Company Information</Title>
+                  <Descriptions column={1} size="small">
+                    <Descriptions.Item label="Company Profile">
+                      {record.company_profile || 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Annual Revenue">
+                      {record.annual_revenue ? `R${record.annual_revenue.toLocaleString()}` : 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Number of Employees">
+                      {record.number_of_employees || 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Product/Service Type">
+                      {record.product_service_type || 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Geographical Network">
+                      {record.geographical_network || 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="CIPC/COR Documents">
+                      <Tag color={record.cipc_cor_documents === 'Yes' ? 'green' : 'orange'}>
+                        {record.cipc_cor_documents || 'N/A'}
+                      </Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Tax Certificate">
+                      <Tag color={record.tax_certificate === 'Yes' ? 'green' : 'orange'}>
+                        {record.tax_certificate || 'N/A'}
+                      </Tag>
+                    </Descriptions.Item>
+                  </Descriptions>
+                </div>
+              </Col>
+              
+              {/* B-BBEE Information Section */}
+              <Col span={8}>
+                <div style={{ marginBottom: '16px' }}>
+                  <Title level={5} style={{ margin: '0 0 12px 0', color: '#52c41a' }}>B-BBEE Information</Title>
+                  <Descriptions column={1} size="small">
+                    <Descriptions.Item label="B-BBEE Level">
+                      {record.bbee_level ? `Level ${record.bbee_level}` : 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Black Ownership %">
+                      {record.black_ownership_percent ? `${record.black_ownership_percent}%` : 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Black Female Ownership %">
+                      {record.black_female_ownership_percent ? `${record.black_female_ownership_percent}%` : 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="B-BBEE Compliant">
+                      <Tag color={record.bbee_compliant ? 'green' : 'red'}>
+                        {record.bbee_compliant ? 'Yes' : 'No'}
+                      </Tag>
+                    </Descriptions.Item>
+                  </Descriptions>
+                </div>
+              </Col>
+              
+              {/* Operational Information Section */}
+              <Col span={8}>
+                <div style={{ marginBottom: '16px' }}>
+                  <Title level={5} style={{ margin: '0 0 12px 0', color: '#722ed1' }}>Operational Information</Title>
+                  <Descriptions column={1} size="small">
+                    <Descriptions.Item label="Fuel Products Offered">
+                      {record.fuel_products_offered || 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Delivery Types">
+                      {record.delivery_types_offered || 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Method of Sourcing">
+                      {record.method_of_sourcing || 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Invest in Refuelling Equipment">
+                      <Tag color={record.invest_in_refuelling_equipment === 'Yes' ? 'green' : 'red'}>
+                        {record.invest_in_refuelling_equipment || 'N/A'}
+                      </Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Reciprocal Business">
+                      <Tag color={record.reciprocal_business === 'Yes' ? 'green' : 'red'}>
+                        {record.reciprocal_business || 'N/A'}
+                      </Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Profile Created">
+                      {new Date(record.created_at).toLocaleDateString()}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </div>
+              </Col>
+            </Row>
+          </Card>
+        </div>
+      )
+    }
+
+    const profileColumns = [
+      {
+        title: 'Supplier Name',
+        dataIndex: 'name',
+        key: 'name',
+        width: 200,
+        sorter: (a, b) => a.name.localeCompare(b.name),
+        render: (text) => <Text strong>{text}</Text>
+      },
+      {
+        title: 'Email',
+        dataIndex: 'email',
+        key: 'email',
+        width: 200,
+        render: (email) => email || 'N/A'
+      },
+      {
+        title: 'B-BBEE Level',
+        dataIndex: 'bbee_level',
+        key: 'bbee_level',
+        width: 120,
+        render: (level) => level ? `Level ${level}` : 'N/A',
+        sorter: (a, b) => (a.bbee_level || 0) - (b.bbee_level || 0),
+      },
+      {
+        title: 'B-BBEE Compliant',
+        dataIndex: 'bbee_compliant',
+        key: 'bbee_compliant',
+        width: 130,
+        render: (compliant) => (
+          <Tag color={compliant ? 'green' : 'red'}>
+            {compliant ? 'Yes' : 'No'}
+          </Tag>
+        ),
+        filters: [
+          { text: 'Compliant', value: true },
+          { text: 'Non-Compliant', value: false },
+        ],
+        onFilter: (value, record) => record.bbee_compliant === value,
+      },
+      {
+        title: 'Employees',
+        dataIndex: 'number_of_employees',
+        key: 'number_of_employees',
+        width: 100,
+        render: (count) => count || 'N/A',
+        sorter: (a, b) => (a.number_of_employees || 0) - (b.number_of_employees || 0),
+      },
+      {
+        title: 'Created',
+        dataIndex: 'created_at',
+        key: 'created_at',
+        width: 150,
+        render: (value) => (
+          <div>
+            <div>{new Date(value).toLocaleDateString()}</div>
+            <div style={{ fontSize: '12px', color: '#666' }}>
+              {new Date(value).toLocaleTimeString()}
+            </div>
+          </div>
+        ),
+        sorter: (a, b) => new Date(a.created_at) - new Date(b.created_at),
+      }
+    ]
+
+    return (
+      <Card 
+        title="Supplier Profiles" 
+        extra={
+          <div>
+            <Button
+              type="primary"
+              icon={<BarChartOutlined />}
+              onClick={fetchSuppliers}
+              style={{ marginRight: 8 }}
+              size="small"
+            >
+              Refresh
+            </Button>
+            <UserOutlined style={{ color: '#1890ff' }} />
+          </div>
+        }
+      >
+        <Alert
+          message={`${suppliers.length} supplier profiles registered in the system`}
+          type="info"
+          style={{ marginBottom: 16 }}
+          showIcon
+        />
+        <Table
+          columns={profileColumns}
+          dataSource={suppliers}
+          rowKey="id"
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (total) => `Total ${total} suppliers`
+          }}
+          expandable={{
+            expandedRowRender,
+            rowExpandable: (record) => true,
+            expandIcon: ({ expanded, onExpand, record }) => (
+              <Button
+                type="text"
+                size="small"
+                icon={expanded ? <CloseOutlined /> : <EyeOutlined />}
+                onClick={(e) => onExpand(record, e)}
+              >
+                {expanded ? 'Hide' : 'View'} Profile
+              </Button>
+            ),
+          }}
+          scroll={{ x: 1000 }}
+          size="small"
+        />
+      </Card>
+    )
+  }
+
   return (
     <div>
       <Tabs
@@ -1558,10 +2221,10 @@ const AdminSupplierManagement = () => {
             label: (
               <span>
                 <UserOutlined />
-                Depot Evaluations
+                Supplier Evaluations
               </span>
             ),
-            children: <DepotEvaluations />
+            children: <SupplierEvaluations />
           },
           {
             key: 'validation',
@@ -1582,6 +2245,16 @@ const AdminSupplierManagement = () => {
               </span>
             ),
             children: <BWMConfiguration />
+          },
+          {
+            key: 'profiles',
+            label: (
+              <span>
+                <UserOutlined />
+                Supplier Profiles
+              </span>
+            ),
+            children: <SupplierProfiles />
           },
           {
             key: 'management',

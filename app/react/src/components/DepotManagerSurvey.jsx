@@ -57,16 +57,64 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
   }
 
 
-  const loadCriteriaFromConfig = () => {
+  const loadCriteriaFromConfig = async () => {
+    // Define survey criteria - these are criteria that participants can evaluate
+    // based on their experience with suppliers
+    const SURVEY_CRITERIA = [
+      "Communication",
+      "Reliability",
+      "Quality"
+    ]
+    
+    // Try to get criteria from backend first
+    try {
+      const response = await fetch('http://localhost:8000/api/bwm/weights/')
+      const data = await response.json()
+      
+      if (response.ok && data.success && data.data) {
+        const backendCriteria = data.data.criteria_names
+        console.log('DepotManagerSurvey - Backend criteria:', backendCriteria)
+        
+        // Filter to only include survey criteria that exist in the BWM configuration
+        const filteredSurveyCriteria = SURVEY_CRITERIA.filter(criterion => 
+          backendCriteria.some(backendCriterion => 
+            backendCriterion.trim().toLowerCase() === criterion.toLowerCase() ||
+            backendCriterion.trim() === criterion
+          )
+        )
+        
+        console.log('DepotManagerSurvey - Filtered survey criteria:', filteredSurveyCriteria)
+        setCriteriaNames(filteredSurveyCriteria)
+        return
+      }
+    } catch (error) {
+      console.error('Error loading criteria from backend:', error)
+    }
+    
+    // Fallback to localStorage
     const savedConfig = localStorage.getItem('bwmConfig')
     console.log('DepotManagerSurvey - savedConfig:', savedConfig)
     if (savedConfig) {
       const config = JSON.parse(savedConfig)
       console.log('DepotManagerSurvey - parsed config:', config)
-      console.log('DepotManagerSurvey - config.criteriaNames:', config.criteriaNames)
-      setCriteriaNames(config.criteriaNames || [])
+      
+      if (config.criteriaNames) {
+        // Filter to only include survey criteria
+        const filteredSurveyCriteria = SURVEY_CRITERIA.filter(criterion => 
+          config.criteriaNames.some(configCriterion => 
+            configCriterion.trim().toLowerCase() === criterion.toLowerCase() ||
+            configCriterion.trim() === criterion
+          )
+        )
+        
+        console.log('DepotManagerSurvey - Filtered survey criteria from localStorage:', filteredSurveyCriteria)
+        setCriteriaNames(filteredSurveyCriteria)
+      } else {
+        setCriteriaNames(SURVEY_CRITERIA)
+      }
     } else {
-      console.log('DepotManagerSurvey - No bwmConfig found in localStorage')
+      console.log('DepotManagerSurvey - No bwmConfig found, using default survey criteria')
+      setCriteriaNames(SURVEY_CRITERIA)
     }
   }
 
@@ -124,8 +172,8 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          manager_name,
-          manager_email,
+          participant_name: manager_name,
+          participant_email: manager_email,
           evaluations: evaluationsArray
         })
       })
@@ -134,6 +182,7 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
         const result = await response.json()
         message.success(`Successfully submitted ${result.count} evaluations!`)
         form.resetFields()
+        form.setFieldsValue({ manager_name: '', manager_email: '' })
         setSelectedSuppliers([])
         setEvaluations({})
         
@@ -201,7 +250,10 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
                   { type: 'email', message: 'Please enter a valid email' }
                 ]}
               >
-                <Input placeholder="Enter your email address" />
+                <Input 
+                  placeholder="Enter your email address" 
+                  autoComplete="off"
+                />
               </Form.Item>
             </Col>
           </Row>
@@ -237,6 +289,13 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
             <>
               <Divider />
               <Title level={4}>Step 2: Evaluate Selected Suppliers</Title>
+              <Alert
+                message="Survey Criteria Only"
+                description="You are evaluating suppliers on survey-based criteria that require your direct experience (Communication, Reliability, Quality). Profile criteria like business type and geographical network are automatically extracted from supplier data."
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
               <Alert
                 message="Evaluation Scale"
                 description="Rate each criterion on a scale of 1-10, where 1 is poor performance and 10 is excellent performance."

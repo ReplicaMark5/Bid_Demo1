@@ -48,6 +48,9 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
   const [preferenceFunctions, setPreferenceFunctions] = useState({})
   const [preferenceThresholds, setPreferenceThresholds] = useState({})
   const [indifferenceThresholds, setIndifferenceThresholds] = useState({})
+  const [thresholdRecommendations, setThresholdRecommendations] = useState({})
+  const [showRecommendations, setShowRecommendations] = useState(false)
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false)
 
   // Load BWM configuration from backend on component mount, fallback to localStorage
   useEffect(() => {
@@ -271,7 +274,7 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
     setCriteriaWeights(newWeights)
   }
 
-  // Initialize preference functions when criteria change
+  // Initialize preference functions when criteria change and auto-load smart defaults
   useEffect(() => {
     if (criteriaNames.length > 0) {
       const newPreferenceFunctions = {}
@@ -301,6 +304,64 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
       setPreferenceFunctions(newPreferenceFunctions)
       setPreferenceThresholds(newPreferenceThresholds)
       setIndifferenceThresholds(newIndifferenceThresholds)
+      
+      // Auto-fetch intelligent recommendations on first load
+      const autoFetchRecommendations = async () => {
+        try {
+          console.log('Auto-fetching threshold recommendations for criteria:', criteriaNames)
+          const response = await fetch('http://localhost:8000/api/promethee/threshold-recommendations', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              criteria_names: criteriaNames,
+              criteria_weights: criteriaWeights,
+              preference_functions: newPreferenceFunctions,
+              preference_thresholds: newPreferenceThresholds,
+              indifference_thresholds: newIndifferenceThresholds
+            })
+          })
+          
+          const data = await response.json()
+          console.log('Received threshold recommendations response:', data)
+          
+          if (response.ok && data.success && data.recommendations) {
+            // Store recommendations immediately
+            setThresholdRecommendations(data.recommendations)
+            
+            // Auto-apply smart recommendations
+            const smartPreferenceThresholds = {}
+            const smartIndifferenceThresholds = {}
+            
+            Object.entries(data.recommendations).forEach(([criterionName, rec]) => {
+              smartPreferenceThresholds[criterionName] = rec.preference_threshold
+              smartIndifferenceThresholds[criterionName] = rec.indifference_threshold
+            })
+            
+            setPreferenceThresholds(smartPreferenceThresholds)
+            setIndifferenceThresholds(smartIndifferenceThresholds)
+            
+            // Ensure recommendations are shown
+            setShowRecommendations(true)
+            
+            console.log('Auto-applied intelligent threshold recommendations:', {
+              recommendations: data.recommendations,
+              showRecommendations: true
+            })
+          } else {
+            console.warn('Invalid or unsuccessful response from threshold recommendations API:', data)
+          }
+        } catch (error) {
+          console.error('Failed to auto-fetch threshold recommendations:', error)
+          // Keep using the default values if auto-fetch fails
+        }
+      }
+      
+      // Only auto-fetch if we don't already have recommendations
+      if (!showRecommendations && Object.keys(thresholdRecommendations).length === 0) {
+        autoFetchRecommendations()
+      }
     }
   }, [criteriaNames])
 
@@ -323,6 +384,87 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
       ...prev,
       [criterionName]: value || 0
     }))
+  }
+
+  const fetchThresholdRecommendations = async () => {
+    setLoadingRecommendations(true)
+    try {
+      const response = await fetch('http://localhost:8000/api/promethee/threshold-recommendations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          criteria_names: criteriaNames,
+          criteria_weights: criteriaWeights,
+          preference_functions: preferenceFunctions,
+          preference_thresholds: preferenceThresholds,
+          indifference_thresholds: indifferenceThresholds
+        })
+      })
+      
+      const data = await response.json()
+      
+      if (response.ok && data.success) {
+        setThresholdRecommendations(data.recommendations)
+        setShowRecommendations(true)
+        notification.success({
+          message: 'Recommendations Generated',
+          description: 'Threshold recommendations calculated based on your data!'
+        })
+      } else {
+        throw new Error(data.detail || 'Failed to get recommendations')
+      }
+    } catch (error) {
+      console.error('Error fetching threshold recommendations:', error)
+      notification.error({
+        message: 'Recommendation Error',
+        description: 'Failed to generate threshold recommendations'
+      })
+    } finally {
+      setLoadingRecommendations(false)
+    }
+  }
+
+  const applyRecommendation = (criterionName, thresholdType) => {
+    const recommendation = thresholdRecommendations[criterionName]
+    if (!recommendation) return
+    
+    if (thresholdType === 'indifference') {
+      setIndifferenceThresholds(prev => ({
+        ...prev,
+        [criterionName]: recommendation.indifference_threshold
+      }))
+    } else if (thresholdType === 'preference') {
+      setPreferenceThresholds(prev => ({
+        ...prev,
+        [criterionName]: recommendation.preference_threshold
+      }))
+    } else if (thresholdType === 'both') {
+      setIndifferenceThresholds(prev => ({
+        ...prev,
+        [criterionName]: recommendation.indifference_threshold
+      }))
+      setPreferenceThresholds(prev => ({
+        ...prev,
+        [criterionName]: recommendation.preference_threshold
+      }))
+    }
+    
+    notification.success({
+      message: 'Applied Recommendation',
+      description: `Updated ${criterionName} thresholds`
+    })
+  }
+
+  const applyAllRecommendations = () => {
+    Object.keys(thresholdRecommendations).forEach(criterionName => {
+      applyRecommendation(criterionName, 'both')
+    })
+    notification.success({
+      message: 'Applied All Recommendations',
+      description: 'All threshold recommendations have been applied'
+    })
   }
 
   const handleScoreChange = (supplierIndex, criteriaIndex, score) => {
@@ -808,7 +950,28 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
                   title="Preference Function Configuration" 
                   type="inner" 
                   style={{ marginBottom: 24 }}
-                  extra={<Text type="secondary">Configure how criteria differences are evaluated</Text>}
+                  extra={
+                    <div>
+                      <Button 
+                        type="primary" 
+                        size="small" 
+                        loading={loadingRecommendations}
+                        onClick={fetchThresholdRecommendations}
+                        style={{ marginRight: 8 }}
+                      >
+                        Refresh Smart Recommendations
+                      </Button>
+                      {showRecommendations && (
+                        <Button 
+                          size="small" 
+                          onClick={applyAllRecommendations}
+                        >
+                          Apply All
+                        </Button>
+                      )}
+                      <Text type="secondary" style={{ marginLeft: 8 }}>Smart thresholds applied automatically. Configure how criteria differences are evaluated.</Text>
+                    </div>
+                  }
                 >
                   <Row gutter={[16, 16]}>
                     {criteriaNames.map((criterionName, index) => (
@@ -842,36 +1005,114 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
                             
                             <Col span={6}>
                               <Text>Indifference Threshold:</Text>
-                              <InputNumber
-                                value={indifferenceThresholds[criterionName] || 0.5}
-                                onChange={(value) => handleIndifferenceThresholdChange(criterionName, value)}
-                                min={0}
-                                max={10}
-                                step={0.1}
-                                style={{ width: '100%', marginTop: 4 }}
-                                placeholder="0.5"
-                              />
-                              <Text type="secondary" style={{ fontSize: '11px' }}>Below this: no preference</Text>
+                              <div style={{ display: 'flex', alignItems: 'center', marginTop: 4 }}>
+                                <InputNumber
+                                  value={indifferenceThresholds[criterionName] || 0.5}
+                                  onChange={(value) => handleIndifferenceThresholdChange(criterionName, value)}
+                                  min={0}
+                                  max={10}
+                                  step={0.1}
+                                  style={{ flex: 1 }}
+                                  placeholder="0.5"
+                                />
+                                {showRecommendations && thresholdRecommendations[criterionName] && (
+                                  <Button 
+                                    size="small" 
+                                    type="link"
+                                    onClick={() => applyRecommendation(criterionName, 'indifference')}
+                                    style={{ padding: '0 4px', marginLeft: 4 }}
+                                    title={`Recommended: ${thresholdRecommendations[criterionName].indifference_threshold}`}
+                                  >
+                                    Auto
+                                  </Button>
+                                )}
+                              </div>
+                              <div style={{ fontSize: '11px', color: '#666' }}>
+                                Below this: no preference
+                                {showRecommendations && thresholdRecommendations[criterionName] && (
+                                  <div style={{ color: '#1890ff' }}>
+                                    Rec: {thresholdRecommendations[criterionName].indifference_threshold}
+                                  </div>
+                                )}
+                              </div>
                             </Col>
                             
                             <Col span={6}>
                               <Text>Preference Threshold:</Text>
-                              <InputNumber
-                                value={preferenceThresholds[criterionName] || 2.0}
-                                onChange={(value) => handlePreferenceThresholdChange(criterionName, value)}
-                                min={0}
-                                max={10}
-                                step={0.1}
-                                style={{ width: '100%', marginTop: 4 }}
-                                placeholder="2.0"
-                              />
-                              <Text type="secondary" style={{ fontSize: '11px' }}>Above this: strict preference</Text>
+                              <div style={{ display: 'flex', alignItems: 'center', marginTop: 4 }}>
+                                <InputNumber
+                                  value={preferenceThresholds[criterionName] || 2.0}
+                                  onChange={(value) => handlePreferenceThresholdChange(criterionName, value)}
+                                  min={0}
+                                  max={10}
+                                  step={0.1}
+                                  style={{ flex: 1 }}
+                                  placeholder="2.0"
+                                />
+                                {showRecommendations && thresholdRecommendations[criterionName] && (
+                                  <Button 
+                                    size="small" 
+                                    type="link"
+                                    onClick={() => applyRecommendation(criterionName, 'preference')}
+                                    style={{ padding: '0 4px', marginLeft: 4 }}
+                                    title={`Recommended: ${thresholdRecommendations[criterionName].preference_threshold}`}
+                                  >
+                                    Auto
+                                  </Button>
+                                )}
+                              </div>
+                              <div style={{ fontSize: '11px', color: '#666' }}>
+                                Above this: strict preference
+                                {showRecommendations && thresholdRecommendations[criterionName] && (
+                                  <div style={{ color: '#1890ff' }}>
+                                    Rec: {thresholdRecommendations[criterionName].preference_threshold}
+                                  </div>
+                                )}
+                              </div>
                             </Col>
                           </Row>
                         </Card>
                       </Col>
                     ))}
                   </Row>
+                  
+                  {showRecommendations && Object.keys(thresholdRecommendations).length > 0 && (
+                    <Card 
+                      title="Smart Threshold Recommendations" 
+                      size="small" 
+                      style={{ marginTop: 16, backgroundColor: '#f6ffed', borderColor: '#b7eb8f' }}
+                    >
+                      <Row gutter={[16, 8]}>
+                        {Object.entries(thresholdRecommendations).map(([criterionName, rec]) => (
+                          <Col span={8} key={criterionName}>
+                            <div style={{ padding: 8, border: '1px solid #d9f7be', borderRadius: 4, backgroundColor: 'white' }}>
+                              <Text strong style={{ fontSize: '12px' }}>{criterionName}</Text>
+                              <div style={{ fontSize: '11px', color: '#666', marginTop: 2 }}>
+                                <div>
+                                  Range: {rec.data_stats?.min !== undefined && rec.data_stats?.max !== undefined 
+                                    ? `${rec.data_stats.min} - ${rec.data_stats.max}` 
+                                    : '-'}
+                                </div>
+                                <div style={{ color: '#1890ff' }}>
+                                  Indiff: {rec.indifference_threshold} | Pref: {rec.preference_threshold}
+                                </div>
+                                <div style={{ color: '#666', fontStyle: 'italic' }}>
+                                  {rec.recommendation_method}
+                                </div>
+                              </div>
+                            </div>
+                          </Col>
+                        ))}
+                      </Row>
+                      <Alert
+                        message="Recommendations Based on Your Data"
+                        description="These thresholds are calculated from your actual score distributions. Profile criteria use specialized logic, while survey criteria use standard rating scale thresholds."
+                        type="info"
+                        showIcon
+                        style={{ marginTop: 12 }}
+                      />
+                    </Card>
+                  )}
                   
                   <Alert
                     message="Preference Function & Threshold Guide"

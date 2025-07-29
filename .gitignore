@@ -4,3 +4,6 @@ venv/
 .venv/
 node_modules/
 app/backend/supplier_data.db
+app/backend/*.db.backup_*
+app/backend/*_corrupted.db
+app/backend/*.xlsx

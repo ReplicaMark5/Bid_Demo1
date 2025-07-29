@@ -75,7 +75,6 @@ const SupplierDataInterface = () => {
   const [selectedSupplier, setSelectedSupplier] = useState(null)
   const [submissions, setSubmissions] = useState([])
   const [loading, setLoading] = useState(false)
-  const [form] = Form.useForm()
   const [detailsModal, setDetailsModal] = useState({ visible: false, submission: null })
   const [profileForm] = Form.useForm()
   const [profileData, setProfileData] = useState(null)
@@ -188,35 +187,6 @@ const SupplierDataInterface = () => {
     }
   }
 
-  const handleSubmit = async (values) => {
-    try {
-      setLoading(true)
-      const response = await fetch('http://localhost:8000/api/suppliers/submit-data/', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          supplier_id: selectedSupplier,
-          ...values
-        })
-      })
-
-      if (response.ok) {
-        message.success('Data submitted successfully and is pending approval')
-        form.resetFields()
-        fetchSupplierSubmissions(selectedSupplier)
-      } else {
-        const errorData = await response.json()
-        message.error(errorData.detail || 'Failed to submit data')
-      }
-    } catch (error) {
-      message.error('Failed to submit data')
-      console.error('Error submitting data:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const getStatusTag = (status) => {
     const statusConfig = {
