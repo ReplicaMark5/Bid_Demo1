@@ -1277,6 +1277,66 @@ class SupplierDatabase:
                 "cleared_count": count_before
             }
     
+    def clear_bwm_weights(self) -> Dict:
+        """Clear all BWM weights and return count of cleared records"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Get count before clearing
+            cursor.execute("SELECT COUNT(*) FROM bwm_weights")
+            count_before = cursor.fetchone()[0]
+            
+            # Clear all BWM weights
+            cursor.execute("DELETE FROM bwm_weights")
+            conn.commit()
+            
+            # Log the operation for audit purposes
+            try:
+                self._log_unified_scores_operation(
+                    operation_type="bwm_weights_cleared",
+                    trigger_source="manual_clear",
+                    records_affected=count_before,
+                    success=True
+                )
+            except Exception as e:
+                # Don't fail the clear operation if logging fails
+                print(f"Warning: Failed to log BWM weights clear operation: {e}")
+            
+            return {
+                "message": "All BWM weights cleared successfully",
+                "cleared_count": count_before
+            }
+    
+    def clear_unified_criteria_scores(self) -> Dict:
+        """Clear all supplier criteria scores from unified table and return count of cleared records"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Get count before clearing
+            cursor.execute("SELECT COUNT(*) FROM supplier_criteria_scores")
+            count_before = cursor.fetchone()[0]
+            
+            # Clear all supplier criteria scores
+            cursor.execute("DELETE FROM supplier_criteria_scores")
+            conn.commit()
+            
+            # Log the operation for audit purposes
+            try:
+                self._log_unified_scores_operation(
+                    operation_type="unified_criteria_scores_cleared",
+                    trigger_source="manual_clear",
+                    records_affected=count_before,
+                    success=True
+                )
+            except Exception as e:
+                # Don't fail the clear operation if logging fails
+                print(f"Warning: Failed to log unified criteria scores clear operation: {e}")
+            
+            return {
+                "message": "All unified criteria scores cleared successfully",
+                "cleared_count": count_before
+            }
+    
     def delete_supplier_evaluation(self, evaluation_id: int) -> Dict[str, Any]:
         """Delete a specific supplier evaluation"""
         with self.get_connection() as conn:

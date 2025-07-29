@@ -2398,6 +2398,7 @@ const AdminSupplierManagement = () => {
                 <p><strong>What will happen:</strong></p>
                 <ul style={{ paddingLeft: '20px', margin: '8px 0' }}>
                   <li>All existing depot manager evaluations will be permanently deleted</li>
+                  <li>BWM weights will be cleared and must be recalculated</li>
                   <li>Criteria configuration will be updated</li>
                   <li>Depot managers will need to re-evaluate all suppliers with the new criteria</li>
                   <li>PROMETHEE II rankings will be reset</li>

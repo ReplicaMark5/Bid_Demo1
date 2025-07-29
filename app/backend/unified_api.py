@@ -1405,14 +1405,22 @@ async def get_threshold_alternatives(request: PROMETHEECalculationRequest, db: S
 
 @app.post("/api/criteria/update")
 async def update_criteria_configuration(request: CriteriaUpdateRequest, db: SupplierDatabase = Depends(get_db)):
-    """Update criteria names and clear all existing evaluations"""
+    """Update criteria names and clear all existing evaluations, BWM weights, and unified criteria scores"""
     try:
         # Clear all existing supplier evaluations
-        clear_result = execute_db_operation(db.clear_supplier_evaluations)
+        clear_evaluations_result = execute_db_operation(db.clear_supplier_evaluations)
+        
+        # Clear all existing BWM weights
+        clear_bwm_result = execute_db_operation(db.clear_bwm_weights)
+        
+        # Clear all existing unified criteria scores
+        clear_unified_result = execute_db_operation(db.clear_unified_criteria_scores)
         
         return {
-            "message": f"Criteria configuration updated successfully. {clear_result['message']}",
-            "cleared_evaluations": clear_result['cleared_count']
+            "message": f"Criteria configuration updated successfully. {clear_evaluations_result['message']} {clear_bwm_result['message']} {clear_unified_result['message']}",
+            "cleared_evaluations": clear_evaluations_result['cleared_count'],
+            "cleared_bwm_weights": clear_bwm_result['cleared_count'],
+            "cleared_unified_scores": clear_unified_result['cleared_count']
         }
         
     except Exception as e:

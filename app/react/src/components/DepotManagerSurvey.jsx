@@ -34,6 +34,21 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
   useEffect(() => {
     fetchSuppliers()
     loadCriteriaFromConfig()
+    
+    // Listen for storage events (when admin updates BWM config)
+    const handleStorageChange = (event) => {
+      if (event.key === 'bwmConfig') {
+        console.log('DepotManagerSurvey - Storage event detected, reloading criteria')
+        loadCriteriaFromConfig()
+      }
+    }
+    
+    window.addEventListener('storage', handleStorageChange)
+    
+    // Cleanup listener on unmount
+    return () => {
+      window.removeEventListener('storage', handleStorageChange)
+    }
   }, [])
 
   // Debug logging for state changes
@@ -58,12 +73,10 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
 
 
   const loadCriteriaFromConfig = async () => {
-    // Define survey criteria - these are criteria that participants can evaluate
-    // based on their experience with suppliers
-    const SURVEY_CRITERIA = [
-      "Communication",
-      "Reliability",
-      "Quality"
+    // Profile criteria are fixed and cannot be evaluated via survey
+    const PROFILE_CRITERIA = [
+      'Product/Service Type', 'Geographical Network', 'Method of Sourcing',
+      'Investment in Equipment', 'Reciprocal Business', 'B-BBEE Level'
     ]
     
     // Try to get criteria from backend first
@@ -75,18 +88,15 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
         const backendCriteria = data.data.criteria_names
         console.log('DepotManagerSurvey - Backend criteria:', backendCriteria)
         
-        // Filter to only include survey criteria that exist in the BWM configuration
-        const filteredSurveyCriteria = SURVEY_CRITERIA.filter(criterion => 
-          backendCriteria.some(backendCriterion => 
-            backendCriterion.trim().toLowerCase() === criterion.toLowerCase() ||
-            backendCriterion.trim() === criterion
-          )
+        // Extract survey criteria (anything beyond the 6 profile criteria)
+        const surveyCriteria = backendCriteria.filter(criterion => 
+          !PROFILE_CRITERIA.includes(criterion.trim())
         )
         
-        console.log('DepotManagerSurvey - Filtered survey criteria:', filteredSurveyCriteria)
-        setCriteriaNames(filteredSurveyCriteria)
+        console.log('DepotManagerSurvey - Survey criteria from backend:', surveyCriteria)
+        setCriteriaNames(surveyCriteria)
         
-        if (filteredSurveyCriteria.length === 0) {
+        if (surveyCriteria.length === 0) {
           console.log('DepotManagerSurvey - No survey criteria configured for evaluation')
         }
         return
@@ -103,26 +113,24 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
       console.log('DepotManagerSurvey - parsed config:', config)
       
       if (config.criteriaNames) {
-        // Filter to only include survey criteria
-        const filteredSurveyCriteria = SURVEY_CRITERIA.filter(criterion => 
-          config.criteriaNames.some(configCriterion => 
-            configCriterion.trim().toLowerCase() === criterion.toLowerCase() ||
-            configCriterion.trim() === criterion
-          )
+        // Extract survey criteria (anything beyond the 6 profile criteria)
+        const surveyCriteria = config.criteriaNames.filter(criterion => 
+          !PROFILE_CRITERIA.includes(criterion.trim())
         )
         
-        console.log('DepotManagerSurvey - Filtered survey criteria from localStorage:', filteredSurveyCriteria)
-        setCriteriaNames(filteredSurveyCriteria)
+        console.log('DepotManagerSurvey - Survey criteria from localStorage:', surveyCriteria)
+        setCriteriaNames(surveyCriteria)
         
-        if (filteredSurveyCriteria.length === 0) {
+        if (surveyCriteria.length === 0) {
           console.log('DepotManagerSurvey - No survey criteria configured for evaluation')
         }
       } else {
-        setCriteriaNames(SURVEY_CRITERIA)
+        // If no configuration exists, set empty criteria (no survey needed)
+        setCriteriaNames([])
       }
     } else {
-      console.log('DepotManagerSurvey - No bwmConfig found, using default survey criteria')
-      setCriteriaNames(SURVEY_CRITERIA)
+      console.log('DepotManagerSurvey - No bwmConfig found, no survey criteria available')
+      setCriteriaNames([])
     }
   }
 
