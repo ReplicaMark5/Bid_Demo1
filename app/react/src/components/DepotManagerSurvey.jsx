@@ -7,9 +7,9 @@ import {
   Col, 
   Select, 
   InputNumber, 
-  Form, 
-  Input, 
+  Form,
   Alert, 
+  Input, 
   Divider,
   Tag,
   Checkbox,
@@ -85,6 +85,10 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
         
         console.log('DepotManagerSurvey - Filtered survey criteria:', filteredSurveyCriteria)
         setCriteriaNames(filteredSurveyCriteria)
+        
+        if (filteredSurveyCriteria.length === 0) {
+          console.log('DepotManagerSurvey - No survey criteria configured for evaluation')
+        }
         return
       }
     } catch (error) {
@@ -109,6 +113,10 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
         
         console.log('DepotManagerSurvey - Filtered survey criteria from localStorage:', filteredSurveyCriteria)
         setCriteriaNames(filteredSurveyCriteria)
+        
+        if (filteredSurveyCriteria.length === 0) {
+          console.log('DepotManagerSurvey - No survey criteria configured for evaluation')
+        }
       } else {
         setCriteriaNames(SURVEY_CRITERIA)
       }
@@ -216,6 +224,26 @@ const DepotManagerSurvey = ({ onSurveyComplete }) => {
   }
 
   const completionStatus = getCompletionStatus()
+
+  // If no survey criteria are configured, show message
+  if (criteriaNames.length === 0) {
+    return (
+      <div>
+        <Card>
+          <Title level={3}>
+            <UserOutlined /> Supplier Evaluation Survey
+          </Title>
+          <Alert 
+            message="No Survey Criteria Configured"
+            description="The administrator has configured the system to use only profile-based criteria. No survey evaluation is needed at this time."
+            type="info"
+            showIcon
+            style={{ margin: '20px 0' }}
+          />
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div>

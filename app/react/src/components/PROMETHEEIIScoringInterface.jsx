@@ -79,39 +79,27 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
             }
           }
         } else {
-          // Fallback to localStorage if no backend data
+          // No BWM weights found in backend - show warning instead of using defaults
+          console.warn('No BWM weights found in database. Please calculate BWM weights first.')
+          // Only load supplier names from localStorage, not weights
           const savedConfig = localStorage.getItem('bwmConfig')
           if (savedConfig) {
             const config = JSON.parse(savedConfig)
-            setNumCriteria(config.numCriteria || 3)
-            setNumSuppliers(config.supplierNames?.length || 0)
-            if (config.criteriaNames) {
-              setCriteriaNames(config.criteriaNames)
-            }
-            if (config.criteriaWeights) {
-              setCriteriaWeights(config.criteriaWeights)
-            }
             if (config.supplierNames) {
               setSupplierNames(config.supplierNames)
+              setNumSuppliers(config.supplierNames.length)
             }
           }
         }
       } catch (error) {
         console.error('Error loading BWM configuration from backend:', error)
-        // Fallback to localStorage on error
+        // On error, only load supplier names, not weights
         const savedConfig = localStorage.getItem('bwmConfig')
         if (savedConfig) {
           const config = JSON.parse(savedConfig)
-          setNumCriteria(config.numCriteria || 3)
-          setNumSuppliers(config.supplierNames?.length || 0)
-          if (config.criteriaNames) {
-            setCriteriaNames(config.criteriaNames)
-          }
-          if (config.criteriaWeights) {
-            setCriteriaWeights(config.criteriaWeights)
-          }
           if (config.supplierNames) {
             setSupplierNames(config.supplierNames)
+            setNumSuppliers(config.supplierNames.length)
           }
         }
       }
@@ -146,14 +134,8 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
     }
   }
 
-  useEffect(() => {
-    // Only reset criteria if they're not already loaded from config
-    const savedConfig = localStorage.getItem('bwmConfig')
-    if (!savedConfig || !JSON.parse(savedConfig).criteriaNames) {
-      setCriteriaNames(Array(numCriteria).fill('').map((_, i) => `Criteria ${i + 1}`))
-      setCriteriaWeights(Array(numCriteria).fill(1.0))
-    }
-  }, [numCriteria])
+  // Removed useEffect that was setting default weights to 1.0
+  // Weights should only come from BWM calculations, not defaults
 
   // Listen for configuration changes from admin panel
   useEffect(() => {
@@ -195,19 +177,12 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
             fetchEvaluationSummary()
           } catch (error) {
             console.error('Error loading BWM config on storage change:', error)
-            // Fallback to localStorage
+            // On error, only update supplier names from localStorage, never weights
             const config = JSON.parse(e.newValue)
-            console.log('Updating PROMETHEE II config from storage (fallback):', config)
-            setNumCriteria(config.numCriteria || 3)
-            setNumSuppliers(config.supplierNames?.length || 0)
-            if (config.criteriaNames) {
-              setCriteriaNames(config.criteriaNames)
-            }
-            if (config.criteriaWeights) {
-              setCriteriaWeights(config.criteriaWeights)
-            }
+            console.log('Updating PROMETHEE II supplier names from storage (fallback):', config)
             if (config.supplierNames) {
               setSupplierNames(config.supplierNames)
+              setNumSuppliers(config.supplierNames.length)
             }
             setSupplierScores({})
             fetchEvaluationSummary()
@@ -495,7 +470,8 @@ const PROMETHEEIIScoringInterface = ({ prometheeResults, setPrometheeResults, se
         
         console.log('Using BWM weights from backend:', backendData.weights)
       } else {
-        console.log('Using local weights (backend not available):', criteriaWeights)
+        // No BWM weights available - cannot run PROMETHEE II
+        throw new Error('BWM weights are required for PROMETHEE II calculation. Please calculate BWM weights first.')
       }
       
       // Normalize weights

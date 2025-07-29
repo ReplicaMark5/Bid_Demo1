@@ -57,13 +57,12 @@ const AdminSupplierManagement = () => {
     pendingConfig: null 
   })
   const [bwmConfig, setBwmConfig] = useState({ 
-    numCriteria: 9, // Profile + Survey criteria combined
+    numCriteria: 6, // Profile criteria only by default
     criteriaNames: [
       'Product/Service Type', 'Geographical Network', 'Method of Sourcing',
-      'Investment in Equipment', 'Reciprocal Business', 'B-BBEE Level',
-      'Survey Criteria 1', 'Survey Criteria 2', 'Survey Criteria 3'
+      'Investment in Equipment', 'Reciprocal Business', 'B-BBEE Level'
     ],
-    criteriaWeights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    criteriaWeights: [],
     supplierNames: [],
     bestCriterion: null,
     worstCriterion: null,
@@ -126,8 +125,10 @@ const AdminSupplierManagement = () => {
       if (!config.criteriaNames || config.criteriaNames.length !== config.numCriteria) {
         config.criteriaNames = Array(config.numCriteria || 3).fill('').map((_, i) => `Criteria ${i + 1}`)
       }
-      if (!config.criteriaWeights || config.criteriaWeights.length !== config.numCriteria) {
-        config.criteriaWeights = Array(config.numCriteria || 3).fill(1.0)
+      // Don't overwrite existing BWM weights with defaults
+      // Only initialize if completely missing
+      if (!config.criteriaWeights) {
+        config.criteriaWeights = []
       }
       // Initialize BWM-specific fields if not present
       if (!config.bestCriterion) config.bestCriterion = null
@@ -1212,7 +1213,8 @@ const AdminSupplierManagement = () => {
         ...bwmConfig,
         numCriteria: pendingConfig.numCriteria,
         criteriaNames: pendingConfig.criteriaNames,
-        criteriaWeights: Array(pendingConfig.numCriteria).fill(1.0),
+        // Don't reset weights to 1.0 - preserve existing BWM weights or leave empty
+        criteriaWeights: bwmConfig.criteriaWeights || [],
         // Reset BWM-specific values when changing criteria
         bestCriterion: null,
         worstCriterion: null,
@@ -1258,7 +1260,7 @@ const AdminSupplierManagement = () => {
     
     const getSurveyCriteria = () => {
       // Get survey criteria from BWM config or use defaults
-      const surveyCriteriaCount = Math.max(3, bwmConfig.numCriteria - 6) // At least 3 survey criteria
+      const surveyCriteriaCount = Math.max(0, bwmConfig.numCriteria - 6) // Allow 0 survey criteria
       return Array(surveyCriteriaCount).fill('').map((_, i) => `Survey Criteria ${i + 1}`)
     }
     
@@ -1740,7 +1742,7 @@ const AdminSupplierManagement = () => {
           <div>
             <Text strong>Number of Survey Criteria:</Text>
             <InputNumber
-              min={3}
+              min={0}
               max={8}
               value={tempConfig.numCriteria - 6}
               onChange={(value) => setTempConfig({ ...tempConfig, numCriteria: value + 6 })}

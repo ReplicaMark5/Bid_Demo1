@@ -12,9 +12,8 @@ from contextlib import contextmanager
 class SupplierDatabase:
     def __init__(self, db_path: str = None):
         if db_path is None:
-            # Default to the database in the backend directory
-            backend_dir = os.path.dirname(os.path.abspath(__file__))
-            db_path = os.path.join(backend_dir, "supplier_data_clean.db")
+            # Default to the Ubuntu database location
+            db_path = "/tmp/supplier_data_fresh.db"
         self.db_path = db_path
         self._lock = threading.RLock()
         self.init_database()
